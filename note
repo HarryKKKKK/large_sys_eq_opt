@@ -1,0 +1,24 @@
+local var + register pressure
+#thread blocks - mem bandwidth high but latency high
+(page) swaping - local storage -> store data
+
+one thread require too much storage -> total storage fixed -> amount reduced
+
+GPU speedup -> known for Euler -> what about large sys eq 
+
+
+
+
+
+
+
+thread divergence
+
+
+
+#baseline cuda code
+toro-test
+shock-bubble test case
+
+
+floating point issue 10^-14 

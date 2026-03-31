@@ -53,3 +53,11 @@ inline Conserved hll_flux(const Conserved& UL, const Conserved& UR, Direction di
     // Star region
     return (SR * FL - SL * FR + (SL * SR) * (UR - UL)) / (SR - SL);
 }
+
+// -----------------------------------
+// FIXME: HLLC solver
+// -----------------------------------
+
+// -----------------------------------
+// FIXME: Exact Riemann solver
+// -----------------------------------
