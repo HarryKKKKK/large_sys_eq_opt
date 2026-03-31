@@ -84,6 +84,10 @@ inline Flux flux_y(const Conserved& U) {
     );
 }
 
+inline Conserved flux_to_conserved(const Flux& F) {
+    return Conserved(F.mass, F.momx, F.momy, F.energy);
+}
+
 // ---------------------------
 // Signal-speeds
 // ---------------------------

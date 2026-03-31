@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cassert>
 #include <cstddef>
 #include <vector>
@@ -11,7 +12,9 @@ public:
     Grid2D() = default;
 
     Grid2D(int nx_, int ny_, int ng_, double x_min_, double x_max_, double y_min_, double y_max_)
-        : nx_(nx_), ny_(ny_), ng_(ng_), x_min_(x_min_), x_max_(x_max_), y_min_(y_min_), y_max_(y_max_) {
+        : nx_(nx_), ny_(ny_), ng_(ng_),
+          x_min_(x_min_), x_max_(x_max_),
+          y_min_(y_min_), y_max_(y_max_) {
 
         dx_ = (x_max_ - x_min_) / static_cast<double>(nx_);
         dy_ = (y_max_ - y_min_) / static_cast<double>(ny_);
@@ -21,9 +24,6 @@ public:
         U_.assign(static_cast<std::size_t>(total_x * total_y), Conserved{});
     }
 
-    // ---------------------------
-    // Getters
-    // ---------------------------
     int nx() const { return nx_; }
     int ny() const { return ny_; }
     int ng() const { return ng_; }
@@ -40,13 +40,18 @@ public:
     double dy() const { return dy_; }
 
     int i_begin() const { return ng_; }
-    int i_end()   const { return ng_ + nx_; }  
+    int i_end() const { return ng_ + nx_; }
     int j_begin() const { return ng_; }
-    int j_end()   const { return ng_ + ny_; } 
+    int j_end() const { return ng_ + ny_; }
 
-    // ---------------------------
-    // Data access
-    // ---------------------------
+    double x_center(int i) const {
+        return x_min_ + (static_cast<double>(i - ng_) + 0.5) * dx_;
+    }
+
+    double y_center(int j) const {
+        return y_min_ + (static_cast<double>(j - ng_) + 0.5) * dy_;
+    }
+
     Conserved& operator()(int i, int j) {
         return U_[flat_index(i, j)];
     }
@@ -58,9 +63,6 @@ public:
     std::vector<Conserved>& data() { return U_; }
     const std::vector<Conserved>& data() const { return U_; }
 
-    // ---------------------------
-    // Helpers
-    // ---------------------------
     void fill(const Conserved& value) {
         std::fill(U_.begin(), U_.end(), value);
     }
@@ -81,6 +83,6 @@ private:
     std::vector<Conserved> U_;
 
     std::size_t flat_index(int i, int j) const {
-        return static_cast<std::size_t>((j * total_nx()) + i);
+        return static_cast<std::size_t>(j * total_nx() + i);
     }
 };

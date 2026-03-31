@@ -13,9 +13,9 @@ enum class Direction {
 
 inline Conserved physical_flux(const Conserved& U, Direction dir) {
     if (dir == Direction::X) {
-        return flux_to_conserved(phys::flux_x(U));
+        return phys::flux_to_conserved(phys::flux_x(U));
     } else {
-        return flux_to_conserved(phys::flux_y(U));
+        return phys::flux_to_conserved(phys::flux_y(U));
     }
 }
 

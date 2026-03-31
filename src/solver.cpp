@@ -28,7 +28,6 @@ double compute_dt(const Grid2D& grid, double cfl) {
     return cfl * std::min(dt_x, dt_y);
 }
 
-
 void advance_first_order(const Grid2D& Uold, Grid2D& Unew, double dt) {
     const int ib = Uold.i_begin();
     const int ie = Uold.i_end();
@@ -38,17 +37,17 @@ void advance_first_order(const Grid2D& Uold, Grid2D& Unew, double dt) {
     const double dx = Uold.dx();
     const double dy = Uold.dy();
 
-    Unew.data() = Uold.data();
-
     for (int j = jb; j < je; ++j) {
         for (int i = ib; i < ie; ++i) {
-            const Conserved Fx_p = hll_flux(Uold(i, j), Uold(i + 1, j), Direction::X);
-            const Conserved Fx_m = hll_flux(Uold(i - 1, j), Uold(i, j), Direction::X);
+            const Conserved Fx_p = hll_flux(Uold(i, j),     Uold(i + 1, j), Direction::X);
+            const Conserved Fx_m = hll_flux(Uold(i - 1, j), Uold(i, j),     Direction::X);
 
-            const Conserved Fy_p = hll_flux(Uold(i, j), Uold(i, j + 1), Direction::Y);
-            const Conserved Fy_m = hll_flux(Uold(i, j - 1), Uold(i, j), Direction::Y);
+            const Conserved Fy_p = hll_flux(Uold(i, j),     Uold(i, j + 1), Direction::Y);
+            const Conserved Fy_m = hll_flux(Uold(i, j - 1), Uold(i, j),     Direction::Y);
 
-            Unew(i, j) = Uold(i, j) - (dt / dx) * (Fx_p - Fx_m) - (dt / dy) * (Fy_p - Fy_m);
+            Unew(i, j) = Uold(i, j)
+                       - (dt / dx) * (Fx_p - Fx_m)
+                       - (dt / dy) * (Fy_p - Fy_m);
         }
     }
 
