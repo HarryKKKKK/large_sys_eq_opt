@@ -1,6 +1,6 @@
 #pragma once
 
-#include "grid.hpp"
+#include "grid_cpu.hpp"
 
 inline void apply_transmissive_boundary(Grid2D& grid) {
     const int ng = grid.ng();

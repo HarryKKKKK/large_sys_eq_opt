@@ -1,6 +1,6 @@
 #pragma once
 
-#include "grid.hpp"
+#include "grid_cpu.hpp"
 
 double compute_dt(const Grid2D& grid, double cfl);
 
