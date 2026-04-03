@@ -1,4 +1,4 @@
-#include "solver.hpp"
+#include "solver_cpu.hpp"
 
 #include <algorithm>
 #include <cmath>
