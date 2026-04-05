@@ -1,4 +1,4 @@
-#include "boundary_gpu.cuh"
+#include "gpu/boundary_gpu.cuh"
 
 namespace {
 

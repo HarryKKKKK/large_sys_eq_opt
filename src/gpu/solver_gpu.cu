@@ -1,4 +1,4 @@
-#include "solver_gpu.cuh"
+#include "gpu/solver_gpu.cuh"
 
 #include <algorithm>
 #include <cmath>

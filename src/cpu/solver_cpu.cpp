@@ -1,10 +1,10 @@
-#include "solver_cpu.hpp"
+#include "cpu/solver_cpu.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
 
-#include "boundary.hpp"
+#include "cpu/boundary_cpu.hpp"
 #include "physics.hpp"
 #include "riemann.hpp"
 #include "types.hpp"

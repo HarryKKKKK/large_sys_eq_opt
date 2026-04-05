@@ -2,28 +2,29 @@
 
 #include <string>
 
-#include "grid.hpp"
+#include "physics.hpp"
+#include "types.hpp"
 
 struct CaseConfig {
-    int nx = 0;
-    int ny = 0;
-    int ng = 1;
-
-    double x_min = 0.0;
-    double x_max = 1.0;
-    double y_min = 0.0;
-    double y_max = 1.0;
-
-    double cfl = 0.4;
-    double t_end = 0.0;
-
-    std::string output_name;
+    int nx;
+    int ny;
+    int ng;
+    double x_min;
+    double x_max;
+    double y_min;
+    double y_max;
+    double cfl;
+    double t_end;
 };
 
-CaseConfig make_shock_bubble_config();
+enum class CaseId {
+    ShockBubble
+};
 
+CaseId parse_case_id(const std::string& case_name);
+
+CaseConfig get_case_config(CaseId case_id);
 CaseConfig get_case_config(const std::string& case_name);
 
-void initialise_shock_bubble(Grid2D& grid);
-
-void initialise_case(Grid2D& grid, const std::string& case_name);
+Conserved initial_state_at(CaseId case_id, double x, double y);
+Conserved initial_state_at(const std::string& case_name, double x, double y);
