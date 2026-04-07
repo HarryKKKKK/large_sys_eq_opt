@@ -1,50 +1,36 @@
-# =========================
-# Compilers
-# =========================
 CXX  := g++
 NVCC := nvcc
 
-# =========================
-# Flags
-# =========================
-CXXFLAGS       := -std=c++17 -O3 -Wall -Wextra -pedantic -Ihead -Ihead/cpu -Ihead/gpu
-NVCC_STD       := -std=c++17
-NVCC_ARCH      := -arch=sm_80
-NVCC_WARN      := -Xcompiler="-Wall -Wextra"
-NVCC_INC       := -Ihead -Ihead/cpu -Ihead/gpu
-NVCCFLAGS      := $(NVCC_STD) -O3 $(NVCC_ARCH) $(NVCC_WARN) $(NVCC_INC)
+CXXFLAGS  := -std=c++17 -O3 -Wall -Wextra -pedantic -Ihead
+NVCCFLAGS := -std=c++17 -O3 -Ihead -Xcompiler="-Wall -Wextra"
 
-# =========================
-# Targets
-# =========================
+CUDA_ARCH := -arch=sm_86
+NVCCFLAGS += $(CUDA_ARCH)
+
+BUILD_DIR := build
+CPU_BUILD_DIR := $(BUILD_DIR)/cpu
+GPU_BUILD_DIR := $(BUILD_DIR)/gpu
+
 CPU_TARGET := main_cpu
 GPU_TARGET := main_gpu
 
-# =========================
-# Sources
-# =========================
-CPU_MAIN   := scripts/cpu/main_cpu.cpp
-GPU_MAIN   := scripts/gpu/main_gpu.cu
+CPU_MAIN := scripts/cpu/main_cpu.cpp
+GPU_MAIN := scripts/gpu/main_gpu.cu
 
-COMMON_CPP := src/test_cases.cpp
-CPU_CPP    := src/cpu/solver_cpu.cpp
-GPU_CU     := src/gpu/solver_gpu.cu src/gpu/boundary_gpu.cu
-
-# =========================
-# Build directories
-# =========================
-BUILD_DIR      := build
-CPU_BUILD_DIR  := $(BUILD_DIR)/cpu
-GPU_BUILD_DIR  := $(BUILD_DIR)/gpu
+COMMON_CPP := src/test_cases.cpp src/init.cpp
+CPU_CPP := src/cpu/solver_cpu.cpp
+GPU_CU := src/gpu/solver_gpu.cu src/gpu/boundary_gpu.cu
 
 CPU_OBJS := \
 	$(CPU_BUILD_DIR)/main_cpu.o \
 	$(CPU_BUILD_DIR)/test_cases.o \
+	$(CPU_BUILD_DIR)/init.o \
 	$(CPU_BUILD_DIR)/solver_cpu.o
 
 GPU_OBJS := \
 	$(GPU_BUILD_DIR)/main_gpu.o \
 	$(GPU_BUILD_DIR)/test_cases.o \
+	$(GPU_BUILD_DIR)/init.o \
 	$(GPU_BUILD_DIR)/solver_gpu.o \
 	$(GPU_BUILD_DIR)/boundary_gpu.o
 
@@ -61,11 +47,15 @@ $(CPU_BUILD_DIR)/main_cpu.o: $(CPU_MAIN)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(CPU_BUILD_DIR)/test_cases.o: $(COMMON_CPP)
+$(CPU_BUILD_DIR)/test_cases.o: src/test_cases.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(CPU_BUILD_DIR)/solver_cpu.o: $(CPU_CPP)
+$(CPU_BUILD_DIR)/init.o: src/init.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(CPU_BUILD_DIR)/solver_cpu.o: src/cpu/solver_cpu.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
@@ -79,7 +69,11 @@ $(GPU_BUILD_DIR)/main_gpu.o: $(GPU_MAIN)
 	@mkdir -p $(dir $@)
 	$(NVCC) $(NVCCFLAGS) -c $< -o $@
 
-$(GPU_BUILD_DIR)/test_cases.o: $(COMMON_CPP)
+$(GPU_BUILD_DIR)/test_cases.o: src/test_cases.cpp
+	@mkdir -p $(dir $@)
+	$(NVCC) $(NVCCFLAGS) -x c++ -c $< -o $@
+
+$(GPU_BUILD_DIR)/init.o: src/init.cpp
 	@mkdir -p $(dir $@)
 	$(NVCC) $(NVCCFLAGS) -x c++ -c $< -o $@
 
