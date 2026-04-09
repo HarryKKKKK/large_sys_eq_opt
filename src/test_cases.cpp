@@ -16,9 +16,6 @@ inline Conserved make_conserved(double rho, double u, double v, double p) {
 }
 
 Conserved shock_bubble_state(double x, double y) {
-    // 这里按你的 shock-bubble benchmark 改参数
-    // 下面先给一个常见模板
-
     constexpr double x_shock = 0.2;
     constexpr double bubble_cx = 0.5;
     constexpr double bubble_cy = 0.0;
@@ -42,7 +39,7 @@ Conserved shock_bubble_state(double x, double y) {
     return make_conserved(1.0, 0.0, 0.0, 1.0);
 }
 
-} // namespace
+}
 
 CaseId parse_case_id(const std::string& case_name) {
     if (case_name == "shock_bubble") {

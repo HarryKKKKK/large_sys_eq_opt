@@ -208,8 +208,8 @@ __global__ void advance_first_order_kernel(
 double compute_dt_gpu(const Grid2DGPU& grid, double cfl) {
     const std::size_t n = grid.num_cells();
     double* speed_d = nullptr;
-    CUDA_CHECK(cudaMalloc(&speed_d, n * sizeof(double)));
-    CUDA_CHECK(cudaMemset(speed_d, 0, n * sizeof(double)));
+    cudaMalloc(&speed_d, n * sizeof(double));
+    cudaMemset(speed_d, 0, n * sizeof(double));
 
     const dim3 threads(16, 16);
     const dim3 blocks(
@@ -217,12 +217,12 @@ double compute_dt_gpu(const Grid2DGPU& grid, double cfl) {
         (grid.ny() + threads.y - 1) / threads.y);
 
     compute_local_speed_kernel<<<blocks, threads>>>(make_view(grid), speed_d);
-    CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
+    cudaGetLastError();
+    cudaDeviceSynchronize();
 
     std::vector<double> speed_h(n, 0.0);
-    CUDA_CHECK(cudaMemcpy(speed_h.data(), speed_d, n * sizeof(double), cudaMemcpyDeviceToHost));
-    CUDA_CHECK(cudaFree(speed_d));
+    cudaMemcpy(speed_h.data(), speed_d, n * sizeof(double), cudaMemcpyDeviceToHost);
+    cudaFree(speed_d);
 
     double smax = 0.0;
     for (int j = grid.j_begin(); j < grid.j_end(); ++j) {
@@ -254,6 +254,6 @@ void advance_first_order_gpu(
         make_view(Unew),
         dt
     );
-    CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
+    cudaGetLastError();
+    cudaDeviceSynchronize();
 }

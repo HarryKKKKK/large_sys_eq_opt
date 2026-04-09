@@ -43,10 +43,6 @@ public:
                   double y_min_, double y_max_) {
         release();
 
-        nx_ = std::max(nx_, 0);
-        ny_ = std::max(ny_, 0);
-        ng_ = std::max(ng_, 0);
-
         nx__ = nx_;
         ny__ = ny_;
         ng__ = ng_;
