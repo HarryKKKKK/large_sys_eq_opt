@@ -4,7 +4,7 @@ NVCC := nvcc
 CXXFLAGS  := -std=c++17 -O3 -Wall -Wextra -pedantic -Ihead
 NVCCFLAGS := -std=c++17 -O3 -Ihead -Xcompiler="-Wall -Wextra"
 
-CUDA_ARCH := -arch=sm_86
+CUDA_ARCH := -arch=sm_80
 NVCCFLAGS += $(CUDA_ARCH)
 
 BUILD_DIR := build
