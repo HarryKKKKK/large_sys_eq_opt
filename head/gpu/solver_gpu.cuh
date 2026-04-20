@@ -10,9 +10,9 @@ void advance_first_order_gpu(
     double dt
 );
 
-inline double minmod_gpu_host(double a, double b) {
-    if (a * b <= 0.0) {
-        return 0.0;
-    }
-    return (a > 0.0) ? std::min(a, b) : std::max(a, b);
-}
+void advance_second_order_gpu(
+    const Grid2DGPU& Uold,
+    Grid2DGPU& Utmp,
+    Grid2DGPU& Unew,
+    double dt
+);

@@ -3,7 +3,11 @@
 namespace {
 
 __global__ void apply_transmissive_boundary_x_kernel(Grid2DGPUView grid) {
-    const int j = blockIdx.x * blockDim.x + threadIdx.x;
+    const int j = blockIdx.x * blockDim.x + threadIdx.x + grid.j_begin();
+
+    if (j >= grid.j_end()) {
+        return;
+    }
 
     const int ng = grid.ng;
     const int ib = grid.i_begin();
@@ -33,6 +37,10 @@ __global__ void apply_transmissive_boundary_x_kernel(Grid2DGPUView grid) {
 __global__ void apply_transmissive_boundary_y_kernel(Grid2DGPUView grid) {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
 
+    if (i >= grid.total_nx()) {
+        return;
+    }
+
     const int ng = grid.ng;
     const int jb = grid.j_begin();
     const int je = grid.j_end();
@@ -58,7 +66,7 @@ __global__ void apply_transmissive_boundary_y_kernel(Grid2DGPUView grid) {
     }
 }
 
-}
+} 
 
 void apply_transmissive_boundary_gpu(Grid2DGPU& grid) {
     Grid2DGPUView view = make_view(grid);

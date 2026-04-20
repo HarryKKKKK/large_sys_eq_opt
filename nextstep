@@ -4,3 +4,12 @@
 
 
 slope
+
+
+PROFILING
+1. profiling gpu code - see where is taking most time (timing)
+2. nvidia - nsight system & nsight compute
+(e.g.)**shared memory to cache adjacent values;
+IMPLEMENTATION
+3. implement MHD - version determined in compiled
+(4.)start report 

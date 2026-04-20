@@ -1,9 +1,9 @@
 import os
 import glob
+import argparse
 import numpy as np
 import pandas as pd
 
-OUTPUT_DIR = "outputs"
 FIELDS = ["rho", "rhou", "rhov", "E"]
 
 
@@ -41,14 +41,40 @@ def compare_one_snapshot(cpu_path, gpu_path):
     return result
 
 
+def get_input_dir():
+    parser = argparse.ArgumentParser(
+        description="Compare CPU and GPU snapshot CSV files."
+    )
+    parser.add_argument(
+        "output_dir",
+        nargs="?",
+        help="Directory containing cpu_snapshot_*.csv and gpu_snapshot_*.csv"
+    )
+    args = parser.parse_args()
+
+    output_dir = args.output_dir
+    if not output_dir:
+        output_dir = input("Please enter the snapshot directory: ").strip()
+
+    if not output_dir:
+        raise ValueError("No directory was provided.")
+
+    if not os.path.isdir(output_dir):
+        raise FileNotFoundError(f"Directory not found: {output_dir}")
+
+    return output_dir
+
+
 def main():
-    cpu_files = sorted(glob.glob(os.path.join(OUTPUT_DIR, "cpu_snapshot_*.csv")))
-    gpu_files = sorted(glob.glob(os.path.join(OUTPUT_DIR, "gpu_snapshot_*.csv")))
+    output_dir = get_input_dir()
+
+    cpu_files = sorted(glob.glob(os.path.join(output_dir, "cpu_snapshot_*.csv")))
+    gpu_files = sorted(glob.glob(os.path.join(output_dir, "gpu_snapshot_*.csv")))
 
     if not cpu_files:
-        raise FileNotFoundError("No cpu_snapshot_*.csv files found in outputs/")
+        raise FileNotFoundError(f"No cpu_snapshot_*.csv files found in {output_dir}")
     if not gpu_files:
-        raise FileNotFoundError("No gpu_snapshot_*.csv files found in outputs/")
+        raise FileNotFoundError(f"No gpu_snapshot_*.csv files found in {output_dir}")
 
     if len(cpu_files) != len(gpu_files):
         raise ValueError(
@@ -84,7 +110,7 @@ def main():
         })
 
     summary = pd.DataFrame(rows)
-    summary_path = os.path.join(OUTPUT_DIR, "comparison_summary.csv")
+    summary_path = os.path.join(output_dir, "comparison_summary.csv")
     summary.to_csv(summary_path, index=False)
     print(f"\nSaved summary to {summary_path}")
 

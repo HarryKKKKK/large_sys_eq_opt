@@ -4,27 +4,33 @@
 #include <cmath>
 #include <stdexcept>
 
+#ifdef __CUDACC__
+#define HD __host__ __device__
+#else
+#define HD
+#endif
+
 struct Conserved {
-    double rho  = 0.0; 
-    double rhou = 0.0; 
-    double rhov = 0.0;  
-    double E    = 0.0; 
+    double rho  = 0.0;
+    double rhou = 0.0;
+    double rhov = 0.0;
+    double E    = 0.0;
 
-    Conserved() = default;
+    HD Conserved() = default;
 
-    Conserved(double rho_, double rhou_, double rhov_, double E_)
+    HD Conserved(double rho_, double rhou_, double rhov_, double E_)
         : rho(rho_), rhou(rhou_), rhov(rhov_), E(E_) {}
 };
 
 struct Primitive {
     double rho = 0.0;
-    double u   = 0.0; 
+    double u   = 0.0;
     double v   = 0.0;
-    double p   = 0.0; 
+    double p   = 0.0;
 
-    Primitive() = default;
+    HD Primitive() = default;
 
-    Primitive(double rho_, double u_, double v_, double p_)
+    HD Primitive(double rho_, double u_, double v_, double p_)
         : rho(rho_), u(u_), v(v_), p(p_) {}
 };
 
@@ -34,17 +40,13 @@ struct Flux {
     double momy   = 0.0;
     double energy = 0.0;
 
-    Flux() = default;
+    HD Flux() = default;
 
-    Flux(double mass_, double momx_, double momy_, double energy_)
+    HD Flux(double mass_, double momx_, double momy_, double energy_)
         : mass(mass_), momx(momx_), momy(momy_), energy(energy_) {}
 };
 
-// ---------------------------
-// Basic operations
-// ---------------------------
-
-inline Conserved operator+(const Conserved& a, const Conserved& b) {
+HD inline Conserved operator+(const Conserved& a, const Conserved& b) {
     return Conserved(
         a.rho + b.rho,
         a.rhou + b.rhou,
@@ -53,7 +55,7 @@ inline Conserved operator+(const Conserved& a, const Conserved& b) {
     );
 }
 
-inline Conserved operator-(const Conserved& a, const Conserved& b) {
+HD inline Conserved operator-(const Conserved& a, const Conserved& b) {
     return Conserved(
         a.rho - b.rho,
         a.rhou - b.rhou,
@@ -62,7 +64,7 @@ inline Conserved operator-(const Conserved& a, const Conserved& b) {
     );
 }
 
-inline Conserved operator*(double s, const Conserved& a) {
+HD inline Conserved operator*(double s, const Conserved& a) {
     return Conserved(
         s * a.rho,
         s * a.rhou,
@@ -71,11 +73,11 @@ inline Conserved operator*(double s, const Conserved& a) {
     );
 }
 
-inline Conserved operator*(const Conserved& a, double s) {
+HD inline Conserved operator*(const Conserved& a, double s) {
     return s * a;
 }
 
-inline Conserved operator/(const Conserved& a, double s) {
+HD inline Conserved operator/(const Conserved& a, double s) {
     return Conserved(
         a.rho / s,
         a.rhou / s,
@@ -84,7 +86,7 @@ inline Conserved operator/(const Conserved& a, double s) {
     );
 }
 
-inline Conserved& operator+=(Conserved& a, const Conserved& b) {
+HD inline Conserved& operator+=(Conserved& a, const Conserved& b) {
     a.rho  += b.rho;
     a.rhou += b.rhou;
     a.rhov += b.rhov;
@@ -92,7 +94,7 @@ inline Conserved& operator+=(Conserved& a, const Conserved& b) {
     return a;
 }
 
-inline Conserved& operator-=(Conserved& a, const Conserved& b) {
+HD inline Conserved& operator-=(Conserved& a, const Conserved& b) {
     a.rho  -= b.rho;
     a.rhou -= b.rhou;
     a.rhov -= b.rhov;
@@ -100,7 +102,7 @@ inline Conserved& operator-=(Conserved& a, const Conserved& b) {
     return a;
 }
 
-inline Conserved& operator*=(Conserved& a, double s) {
+HD inline Conserved& operator*=(Conserved& a, double s) {
     a.rho  *= s;
     a.rhou *= s;
     a.rhov *= s;
@@ -108,7 +110,7 @@ inline Conserved& operator*=(Conserved& a, double s) {
     return a;
 }
 
-inline Primitive operator+(const Primitive& a, const Primitive& b) {
+HD inline Primitive operator+(const Primitive& a, const Primitive& b) {
     return Primitive(
         a.rho + b.rho,
         a.u   + b.u,
@@ -117,7 +119,7 @@ inline Primitive operator+(const Primitive& a, const Primitive& b) {
     );
 }
 
-inline Primitive operator-(const Primitive& a, const Primitive& b) {
+HD inline Primitive operator-(const Primitive& a, const Primitive& b) {
     return Primitive(
         a.rho - b.rho,
         a.u   - b.u,
@@ -126,7 +128,7 @@ inline Primitive operator-(const Primitive& a, const Primitive& b) {
     );
 }
 
-inline Primitive operator*(double s, const Primitive& a) {
+HD inline Primitive operator*(double s, const Primitive& a) {
     return Primitive(
         s * a.rho,
         s * a.u,
@@ -135,15 +137,39 @@ inline Primitive operator*(double s, const Primitive& a) {
     );
 }
 
-inline Primitive operator*(const Primitive& a, double s) {
+HD inline Primitive operator*(const Primitive& a, double s) {
     return s * a;
 }
 
-inline Primitive operator/(const Primitive& a, double s) {
+HD inline Primitive operator/(const Primitive& a, double s) {
     return Primitive(
         a.rho / s,
         a.u   / s,
         a.v   / s,
         a.p   / s
     );
+}
+
+HD inline Primitive& operator+=(Primitive& a, const Primitive& b) {
+    a.rho += b.rho;
+    a.u   += b.u;
+    a.v   += b.v;
+    a.p   += b.p;
+    return a;
+}
+
+HD inline Primitive& operator-=(Primitive& a, const Primitive& b) {
+    a.rho -= b.rho;
+    a.u   -= b.u;
+    a.v   -= b.v;
+    a.p   -= b.p;
+    return a;
+}
+
+HD inline Primitive& operator*=(Primitive& a, double s) {
+    a.rho *= s;
+    a.u   *= s;
+    a.v   *= s;
+    a.p   *= s;
+    return a;
 }

@@ -4,6 +4,8 @@
 #include <stdexcept>
 #include <string>
 
+#include "physics.hpp"
+
 namespace {
 
 inline Conserved make_conserved(double rho, double u, double v, double p) {
@@ -16,27 +18,47 @@ inline Conserved make_conserved(double rho, double u, double v, double p) {
 }
 
 Conserved shock_bubble_state(double x, double y) {
-    constexpr double x_shock = 0.2;
-    constexpr double bubble_cx = 0.5;
-    constexpr double bubble_cy = 0.0;
-    constexpr double bubble_r  = 0.2;
+    constexpr double rho_air    = 1.29;
+    constexpr double rho_helium = 0.214;
+    constexpr double p0         = 1.01325e5;
+    constexpr double mach       = 1.22;
+
+    constexpr double bubble_r  = 0.025;
+    constexpr double bubble_cx = 0.035;
+    constexpr double bubble_cy = 0.0445;
+    constexpr double shock_x   = 0.005;
+
+    const double a0 = std::sqrt(phys::gamma * p0 / rho_air);
+    const double M2 = mach * mach;
+
+    const double rho2 = rho_air * ((phys::gamma + 1.0) * M2)
+                      / ((phys::gamma - 1.0) * M2 + 2.0);
+
+    const double p2 = p0 * (1.0 + 2.0 * phys::gamma / (phys::gamma + 1.0) * (M2 - 1.0));
+
+    const double u2 = 2.0 * a0 / (phys::gamma + 1.0)
+                    * (mach - 1.0 / mach);
+
+    double rho = rho_air;
+    double u   = 0.0;
+    double v   = 0.0;
+    double p   = p0;
+    if (x < shock_x) {
+        rho = rho2;
+        u   = u2;
+        v   = 0.0;
+        p   = p2;
+    }
 
     const double dx = x - bubble_cx;
     const double dy = y - bubble_cy;
     const bool in_bubble = (dx * dx + dy * dy <= bubble_r * bubble_r);
 
-    // shocked air
-    if (x < x_shock) {
-        return make_conserved(1.3764, 0.394, 0.0, 1.5698);
-    }
-
-    // helium bubble
     if (in_bubble) {
-        return make_conserved(0.1819, 0.0, 0.0, 1.0);
+        rho = rho_helium;
     }
 
-    // ambient air
-    return make_conserved(1.0, 0.0, 0.0, 1.0);
+    return make_conserved(rho, u, v, p);
 }
 
 }
@@ -57,11 +79,11 @@ CaseConfig get_case_config(CaseId case_id) {
                 197,        // ny
                 2,          // ng
                 0.0,        // x_min
-                1.0,        // x_max
-                -0.178,     // y_min
-                0.178,      // y_max
+                0.225,      // x_max
+                0.0,        // y_min
+                0.089,      // y_max
                 0.4,        // cfl
-                0.3         // t_end
+                0.0011741   // t_end
             };
     }
 

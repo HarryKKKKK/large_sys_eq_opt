@@ -5,126 +5,148 @@
 #include <limits>
 #include <vector>
 
+#include "gpu/boundary_gpu.cuh"
+#include "physics.hpp"
+#include "riemann.hpp"
+#include "types.hpp"
+
 namespace {
 
-constexpr double gamma_gas = 1.4;
-constexpr double small_p = 1e-12;
-constexpr double small_rho = 1e-12;
+constexpr double kRhoFloor = 1.0e-12;
+constexpr double kPFloor   = 1.0e-12;
 
-struct PrimitiveGPU {
-    double rho;
-    double u;
-    double v;
-    double p;
-};
-
-struct FluxGPU {
-    double rho;
-    double rhou;
-    double rhov;
-    double E;
-};
-
-__device__ inline PrimitiveGPU cons_to_prim(double rho, double rhou, double rhov, double E) {
-    PrimitiveGPU W{};
-    W.rho = fmax(rho, small_rho);
-
-    const double inv_rho = 1.0 / W.rho;
-    W.u = rhou * inv_rho;
-    W.v = rhov * inv_rho;
-
-    const double kinetic = 0.5 * W.rho * (W.u * W.u + W.v * W.v);
-    W.p = fmax((gamma_gas - 1.0) * (E - kinetic), small_p);
-
-    return W;
+__device__ inline double minmod_gpu(double a, double b) {
+    if (a * b <= 0.0) {
+        return 0.0;
+    }
+    return (a > 0.0) ? fmin(a, b) : fmax(a, b);
 }
 
-__device__ inline FluxGPU flux_x(double rho, double rhou, double rhov, double E) {
-    const PrimitiveGPU W = cons_to_prim(rho, rhou, rhov, E);
-
-    FluxGPU F{};
-    F.rho  = rhou;
-    F.rhou = rhou * W.u + W.p;
-    F.rhov = rhov * W.u;
-    F.E    = (E + W.p) * W.u;
-    return F;
+__device__ inline Primitive minmod_gpu(const Primitive& a, const Primitive& b) {
+    return Primitive(
+        minmod_gpu(a.rho, b.rho),
+        minmod_gpu(a.u,   b.u),
+        minmod_gpu(a.v,   b.v),
+        minmod_gpu(a.p,   b.p)
+    );
 }
 
-__device__ inline FluxGPU flux_y(double rho, double rhou, double rhov, double E) {
-    const PrimitiveGPU W = cons_to_prim(rho, rhou, rhov, E);
-
-    FluxGPU F{};
-    F.rho  = rhov;
-    F.rhou = rhou * W.v;
-    F.rhov = rhov * W.v + W.p;
-    F.E    = (E + W.p) * W.v;
-    return F;
+__device__ inline bool is_physical_gpu(const Primitive& V) {
+    return isfinite(V.rho) && isfinite(V.u) &&
+           isfinite(V.v)   && isfinite(V.p) &&
+           (V.rho > kRhoFloor) && (V.p > kPFloor);
 }
 
-__device__ inline FluxGPU hll_flux_x(
-    double rhoL, double rhouL, double rhovL, double EL,
-    double rhoR, double rhouR, double rhovR, double ER) {
-
-    const PrimitiveGPU WL = cons_to_prim(rhoL, rhouL, rhovL, EL);
-    const PrimitiveGPU WR = cons_to_prim(rhoR, rhouR, rhovR, ER);
-
-    const double aL = sqrt(gamma_gas * WL.p / WL.rho);
-    const double aR = sqrt(gamma_gas * WR.p / WR.rho);
-
-    const double SL = fmin(WL.u - aL, WR.u - aR);
-    const double SR = fmax(WL.u + aL, WR.u + aR);
-
-    const FluxGPU FL = flux_x(rhoL, rhouL, rhovL, EL);
-    const FluxGPU FR = flux_x(rhoR, rhouR, rhovR, ER);
-
-    if (SL >= 0.0) {
-        return FL;
-    }
-    if (SR <= 0.0) {
-        return FR;
-    }
-
-    const double inv = 1.0 / (SR - SL);
-
-    FluxGPU F{};
-    F.rho  = (SR * FL.rho  - SL * FR.rho  + SL * SR * (rhoR  - rhoL )) * inv;
-    F.rhou = (SR * FL.rhou - SL * FR.rhou + SL * SR * (rhouR - rhouL)) * inv;
-    F.rhov = (SR * FL.rhov - SL * FR.rhov + SL * SR * (rhovR - rhovL)) * inv;
-    F.E    = (SR * FL.E    - SL * FR.E    + SL * SR * (ER    - EL   )) * inv;
-    return F;
+__device__ inline Primitive enforce_physical_primitive_gpu(const Primitive& candidate,
+                                                           const Primitive& fallback) {
+    return is_physical_gpu(candidate) ? candidate : fallback;
 }
 
-__device__ inline FluxGPU hll_flux_y(
-    double rhoL, double rhouL, double rhovL, double EL,
-    double rhoR, double rhouR, double rhovR, double ER) {
+__device__ inline Conserved enforce_physical_conserved_gpu(const Conserved& candidate,
+                                                           const Conserved& fallback) {
+    const Primitive Vcand = phys::cons_to_prim(candidate);
+    return is_physical_gpu(Vcand) ? candidate : fallback;
+}
 
-    const PrimitiveGPU WL = cons_to_prim(rhoL, rhouL, rhovL, EL);
-    const PrimitiveGPU WR = cons_to_prim(rhoR, rhouR, rhovR, ER);
+__device__ inline Conserved load_state(const Grid2DGPUView& U, int i, int j) {
+    const int idx = U.flat_index(i, j);
+    return Conserved(U.rho[idx], U.rhou[idx], U.rhov[idx], U.E[idx]);
+}
 
-    const double aL = sqrt(gamma_gas * WL.p / WL.rho);
-    const double aR = sqrt(gamma_gas * WR.p / WR.rho);
+__device__ inline Primitive limited_slope_gpu(const Primitive& Wm,
+                                              const Primitive& Wc,
+                                              const Primitive& Wp) {
+    return minmod_gpu(Wc - Wm, Wp - Wc);
+}
 
-    const double SL = fmin(WL.v - aL, WR.v - aR);
-    const double SR = fmax(WL.v + aL, WR.v + aR);
+__device__ inline void reconstruct_cell_muscl_hancock_gpu(
+    const Conserved& Um,
+    const Conserved& Uc,
+    const Conserved& Up,
+    double dt_over_d,
+    Direction dir,
+    Conserved& U_left_star,
+    Conserved& U_right_star
+) {
+    const Primitive Wm = phys::cons_to_prim(Um);
+    const Primitive Wc = phys::cons_to_prim(Uc);
+    const Primitive Wp = phys::cons_to_prim(Up);
 
-    const FluxGPU FL = flux_y(rhoL, rhouL, rhovL, EL);
-    const FluxGPU FR = flux_y(rhoR, rhouR, rhovR, ER);
+    const Primitive slope = limited_slope_gpu(Wm, Wc, Wp);
 
-    if (SL >= 0.0) {
-        return FL;
-    }
-    if (SR <= 0.0) {
-        return FR;
-    }
+    Primitive W_left  = Wc - 0.5 * slope;
+    Primitive W_right = Wc + 0.5 * slope;
 
-    const double inv = 1.0 / (SR - SL);
+    W_left  = enforce_physical_primitive_gpu(W_left,  Wc);
+    W_right = enforce_physical_primitive_gpu(W_right, Wc);
 
-    FluxGPU F{};
-    F.rho  = (SR * FL.rho  - SL * FR.rho  + SL * SR * (rhoR  - rhoL )) * inv;
-    F.rhou = (SR * FL.rhou - SL * FR.rhou + SL * SR * (rhouR - rhouL)) * inv;
-    F.rhov = (SR * FL.rhov - SL * FR.rhov + SL * SR * (rhovR - rhovL)) * inv;
-    F.E    = (SR * FL.E    - SL * FR.E    + SL * SR * (ER    - EL   )) * inv;
-    return F;
+    const Conserved U_left  = phys::prim_to_cons(W_left);
+    const Conserved U_right = phys::prim_to_cons(W_right);
+
+    const Conserved F_left  = physical_flux(U_left,  dir);
+    const Conserved F_right = physical_flux(U_right, dir);
+
+    const Conserved half_update = 0.5 * dt_over_d * (F_right - F_left);
+
+    U_left_star  = U_left  - half_update;
+    U_right_star = U_right - half_update;
+
+    U_left_star  = enforce_physical_conserved_gpu(U_left_star,  U_left);
+    U_right_star = enforce_physical_conserved_gpu(U_right_star, U_right);
+}
+
+__device__ inline Conserved muscl_hancock_flux_x_gpu(const Grid2DGPUView& U, int i, int j, double dt) {
+    const double dt_over_dx = dt / U.dx;
+
+    Conserved Ui_L_star, Ui_R_star;
+    Conserved Uip1_L_star, Uip1_R_star;
+
+    reconstruct_cell_muscl_hancock_gpu(
+        load_state(U, i - 1, j),
+        load_state(U, i,     j),
+        load_state(U, i + 1, j),
+        dt_over_dx,
+        Direction::X,
+        Ui_L_star, Ui_R_star
+    );
+
+    reconstruct_cell_muscl_hancock_gpu(
+        load_state(U, i,     j),
+        load_state(U, i + 1, j),
+        load_state(U, i + 2, j),
+        dt_over_dx,
+        Direction::X,
+        Uip1_L_star, Uip1_R_star
+    );
+
+    return hll_flux(Ui_R_star, Uip1_L_star, Direction::X);
+}
+
+__device__ inline Conserved muscl_hancock_flux_y_gpu(const Grid2DGPUView& U, int i, int j, double dt) {
+    const double dt_over_dy = dt / U.dy;
+
+    Conserved Uj_L_star, Uj_R_star;
+    Conserved Ujp1_L_star, Ujp1_R_star;
+
+    reconstruct_cell_muscl_hancock_gpu(
+        load_state(U, i, j - 1),
+        load_state(U, i, j),
+        load_state(U, i, j + 1),
+        dt_over_dy,
+        Direction::Y,
+        Uj_L_star, Uj_R_star
+    );
+
+    reconstruct_cell_muscl_hancock_gpu(
+        load_state(U, i, j),
+        load_state(U, i, j + 1),
+        load_state(U, i, j + 2),
+        dt_over_dy,
+        Direction::Y,
+        Ujp1_L_star, Ujp1_R_star
+    );
+
+    return hll_flux(Uj_R_star, Ujp1_L_star, Direction::Y);
 }
 
 __global__ void compute_local_speed_kernel(Grid2DGPUView grid, double* speed) {
@@ -136,20 +158,17 @@ __global__ void compute_local_speed_kernel(Grid2DGPUView grid, double* speed) {
     }
 
     const int idx = grid.flat_index(i, j);
-    const PrimitiveGPU W = cons_to_prim(
-        grid.rho[idx], grid.rhou[idx], grid.rhov[idx], grid.E[idx]);
-
-    const double a = sqrt(gamma_gas * W.p / W.rho);
-    const double sx = fabs(W.u) + a;
-    const double sy = fabs(W.v) + a;
+    const Conserved U(grid.rho[idx], grid.rhou[idx], grid.rhov[idx], grid.E[idx]);
+    const Primitive V = phys::cons_to_prim(U);
+    const double a = phys::sound_speed(V);
+    const double sx = fabs(V.u) + a;
+    const double sy = fabs(V.v) + a;
     speed[idx] = fmax(sx, sy);
 }
 
-__global__ void advance_first_order_kernel(
-    Grid2DGPUView Uold,
-    Grid2DGPUView Unew,
-    double dt) {
-
+__global__ void advance_first_order_kernel(Grid2DGPUView Uold,
+                                           Grid2DGPUView Unew,
+                                           double dt) {
     const int i = blockIdx.x * blockDim.x + threadIdx.x + Uold.i_begin();
     const int j = blockIdx.y * blockDim.y + threadIdx.y + Uold.j_begin();
 
@@ -157,56 +176,81 @@ __global__ void advance_first_order_kernel(
         return;
     }
 
-    const int c  = Uold.flat_index(i, j);
-    const int im = Uold.flat_index(i - 1, j);
-    const int ip = Uold.flat_index(i + 1, j);
-    const int jm = Uold.flat_index(i, j - 1);
-    const int jp = Uold.flat_index(i, j + 1);
+    const Conserved Uc  = load_state(Uold, i,     j);
+    const Conserved Uim = load_state(Uold, i - 1, j);
+    const Conserved Uip = load_state(Uold, i + 1, j);
+    const Conserved Ujm = load_state(Uold, i, j - 1);
+    const Conserved Ujp = load_state(Uold, i, j + 1);
 
-    const FluxGPU FxL = hll_flux_x(
-        Uold.rho[im], Uold.rhou[im], Uold.rhov[im], Uold.E[im],
-        Uold.rho[c],  Uold.rhou[c],  Uold.rhov[c],  Uold.E[c]);
-
-    const FluxGPU FxR = hll_flux_x(
-        Uold.rho[c],  Uold.rhou[c],  Uold.rhov[c],  Uold.E[c],
-        Uold.rho[ip], Uold.rhou[ip], Uold.rhov[ip], Uold.E[ip]);
-
-    const FluxGPU FyB = hll_flux_y(
-        Uold.rho[jm], Uold.rhou[jm], Uold.rhov[jm], Uold.E[jm],
-        Uold.rho[c],  Uold.rhou[c],  Uold.rhov[c],  Uold.E[c]);
-
-    const FluxGPU FyT = hll_flux_y(
-        Uold.rho[c],  Uold.rhou[c],  Uold.rhov[c],  Uold.E[c],
-        Uold.rho[jp], Uold.rhou[jp], Uold.rhov[jp], Uold.E[jp]);
+    const Conserved FxL = hll_flux(Uim, Uc,  Direction::X);
+    const Conserved FxR = hll_flux(Uc,  Uip, Direction::X);
+    const Conserved FyB = hll_flux(Ujm, Uc,  Direction::Y);
+    const Conserved FyT = hll_flux(Uc,  Ujp, Direction::Y);
 
     const double dtdx = dt / Uold.dx;
     const double dtdy = dt / Uold.dy;
+    const Conserved Unew_cell = Uc
+                              - dtdx * (FxR - FxL)
+                              - dtdy * (FyT - FyB);
 
-    Unew.rho[c] =
-        Uold.rho[c]
-        - dtdx * (FxR.rho  - FxL.rho)
-        - dtdy * (FyT.rho  - FyB.rho);
+    const int c = Uold.flat_index(i, j);
+    Unew.rho[c]  = Unew_cell.rho;
+    Unew.rhou[c] = Unew_cell.rhou;
+    Unew.rhov[c] = Unew_cell.rhov;
+    Unew.E[c]    = Unew_cell.E;
+}
 
-    Unew.rhou[c] =
-        Uold.rhou[c]
-        - dtdx * (FxR.rhou - FxL.rhou)
-        - dtdy * (FyT.rhou - FyB.rhou);
+__global__ void sweep_x_second_order_kernel(Grid2DGPUView Uin,
+                                            Grid2DGPUView Uout,
+                                            double dt) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x + Uin.i_begin();
+    const int j = blockIdx.y * blockDim.y + threadIdx.y + Uin.j_begin();
 
-    Unew.rhov[c] =
-        Uold.rhov[c]
-        - dtdx * (FxR.rhov - FxL.rhov)
-        - dtdy * (FyT.rhov - FyB.rhov);
+    if (i >= Uin.i_end() || j >= Uin.j_end()) {
+        return;
+    }
 
-    Unew.E[c] =
-        Uold.E[c]
-        - dtdx * (FxR.E    - FxL.E)
-        - dtdy * (FyT.E    - FyB.E);
+    const Conserved Fx_p = muscl_hancock_flux_x_gpu(Uin, i,     j, dt);
+    const Conserved Fx_m = muscl_hancock_flux_x_gpu(Uin, i - 1, j, dt);
+
+    const Conserved Uc = load_state(Uin, i, j);
+    const double dtdx = dt / Uin.dx;
+    const Conserved Unew_cell = Uc - dtdx * (Fx_p - Fx_m);
+
+    const int c = Uin.flat_index(i, j);
+    Uout.rho[c]  = Unew_cell.rho;
+    Uout.rhou[c] = Unew_cell.rhou;
+    Uout.rhov[c] = Unew_cell.rhov;
+    Uout.E[c]    = Unew_cell.E;
+}
+
+__global__ void sweep_y_second_order_kernel(Grid2DGPUView Uin, Grid2DGPUView Uout, double dt) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x + Uin.i_begin();
+    const int j = blockIdx.y * blockDim.y + threadIdx.y + Uin.j_begin();
+
+    if (i >= Uin.i_end() || j >= Uin.j_end()) {
+        return;
+    }
+
+    const Conserved Fy_p = muscl_hancock_flux_y_gpu(Uin, i, j,     dt);
+    const Conserved Fy_m = muscl_hancock_flux_y_gpu(Uin, i, j - 1, dt);
+
+    const Conserved Uc = load_state(Uin, i, j);
+    const double dtdy = dt / Uin.dy;
+    const Conserved Unew_cell = Uc - dtdy * (Fy_p - Fy_m);
+
+    const int c = Uin.flat_index(i, j);
+    Uout.rho[c]  = Unew_cell.rho;
+    Uout.rhou[c] = Unew_cell.rhou;
+    Uout.rhov[c] = Unew_cell.rhov;
+    Uout.E[c]    = Unew_cell.E;
 }
 
 }
 
 double compute_dt_gpu(const Grid2DGPU& grid, double cfl) {
     const std::size_t n = grid.num_cells();
+
     double* speed_d = nullptr;
     cudaMalloc(&speed_d, n * sizeof(double));
     cudaMemset(speed_d, 0, n * sizeof(double));
@@ -214,7 +258,8 @@ double compute_dt_gpu(const Grid2DGPU& grid, double cfl) {
     const dim3 threads(16, 16);
     const dim3 blocks(
         (grid.nx() + threads.x - 1) / threads.x,
-        (grid.ny() + threads.y - 1) / threads.y);
+        (grid.ny() + threads.y - 1) / threads.y
+    );
 
     compute_local_speed_kernel<<<blocks, threads>>>(make_view(grid), speed_d);
     cudaGetLastError();
@@ -224,36 +269,52 @@ double compute_dt_gpu(const Grid2DGPU& grid, double cfl) {
     cudaMemcpy(speed_h.data(), speed_d, n * sizeof(double), cudaMemcpyDeviceToHost);
     cudaFree(speed_d);
 
-    double smax = 0.0;
+    double max_speed = 0.0;
     for (int j = grid.j_begin(); j < grid.j_end(); ++j) {
         for (int i = grid.i_begin(); i < grid.i_end(); ++i) {
-            smax = std::max(smax, speed_h[grid.flat_index(i, j)]);
+            max_speed = std::max(max_speed, speed_h[grid.flat_index(i, j)]);
         }
     }
 
-    if (smax <= 0.0) {
+    if (max_speed <= 0.0) {
         return std::numeric_limits<double>::max();
     }
 
-    const double h = std::min(grid.dx(), grid.dy());
-    return cfl * h / smax;
+    const double dt_x = grid.dx() / max_speed;
+    const double dt_y = grid.dy() / max_speed;
+    return cfl * std::min(dt_x, dt_y);
 }
 
-void advance_first_order_gpu(
-    const Grid2DGPU& Uold,
-    Grid2DGPU& Unew,
-    double dt
-) {
+void advance_first_order_gpu(const Grid2DGPU& Uold, Grid2DGPU& Unew, double dt) {
     const dim3 threads(16, 16);
     const dim3 blocks(
         (Uold.nx() + threads.x - 1) / threads.x,
-        (Uold.ny() + threads.y - 1) / threads.y);
-
-    advance_first_order_kernel<<<blocks, threads>>>(
-        make_view(Uold),
-        make_view(Unew),
-        dt
+        (Uold.ny() + threads.y - 1) / threads.y
     );
+
+    advance_first_order_kernel<<<blocks, threads>>>(make_view(Uold), make_view(Unew), dt);
     cudaGetLastError();
     cudaDeviceSynchronize();
+    apply_transmissive_boundary_gpu(Unew);
+}
+
+void advance_second_order_gpu(const Grid2DGPU& Uold,
+                              Grid2DGPU& Utmp,
+                              Grid2DGPU& Unew,
+                              double dt) {
+    const dim3 threads(16, 16);
+    const dim3 blocks(
+        (Uold.nx() + threads.x - 1) / threads.x,
+        (Uold.ny() + threads.y - 1) / threads.y
+    );
+
+    sweep_x_second_order_kernel<<<blocks, threads>>>(make_view(Uold), make_view(Utmp), dt);
+    cudaGetLastError();
+    cudaDeviceSynchronize();
+    apply_transmissive_boundary_gpu(Utmp);
+
+    sweep_y_second_order_kernel<<<blocks, threads>>>(make_view(Utmp), make_view(Unew), dt);
+    cudaGetLastError();
+    cudaDeviceSynchronize();
+    apply_transmissive_boundary_gpu(Unew);
 }
