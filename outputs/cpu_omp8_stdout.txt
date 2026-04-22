@@ -1,0 +1,25 @@
+[CPU] Wrote snapshot 1 at t = 0.000234916 -> outputs/cpu_snapshot_1.csv
+[CPU] Wrote snapshot 2 at t = 0.000469817 -> outputs/cpu_snapshot_2.csv
+[CPU] Wrote snapshot 3 at t = 0.000704535 -> outputs/cpu_snapshot_3.csv
+[CPU] Wrote snapshot 4 at t = 0.000939401 -> outputs/cpu_snapshot_4.csv
+[CPU] Wrote snapshot 5 at t = 0.0011741 -> outputs/cpu_snapshot_5.csv
+[CPU] Finished.
+[CPU] Final time = 0.0011741
+[CPU] Total steps = 6359
+
+=== CPU Timing Summary ===
+output_dir_time        : 0.000226 s
+config_and_init_time   : 0.005329 s
+snapshot_schedule_time : 0.000002 s
+main_loop_time         : 37.176929 s
+  boundary_time        : 0.026976 s
+  compute_dt_time      : 0.663901 s
+  advance_time         : 33.958177 s
+  snapshot_write_time  : 2.525283 s
+total_program_time     : 37.182486 s
+avg_time_per_step      : 0.005846 s
+avg_boundary_per_step  : 0.000004 s
+avg_compute_dt_step    : 0.000104 s
+avg_advance_per_step   : 0.005340 s
+==========================
+[CPU] Timing report written to outputs/cpu_timing.txt

@@ -68,7 +68,7 @@ all: cpu gpu
 cpu: $(CPU_TARGET)
 
 $(CPU_TARGET): $(CPU_OBJS)
-	$(CXX) $(CXXFLAGS) $(CPU_OBJS) -o $@
+	$(CXX) $(CXXFLAGS) $(CPU_OBJS) -o $@ -lstdc++fs
 
 $(CPU_BUILD_DIR)/main_cpu.o: $(CPU_MAIN)
 	@mkdir -p $(dir $@)
@@ -93,7 +93,7 @@ $(CPU_BUILD_DIR)/solver_cpu.o: src/cpu/solver_cpu.cpp
 cpu_serial: $(CPU_SERIAL_TARGET)
 
 $(CPU_SERIAL_TARGET): $(CPU_SERIAL_OBJS)
-	$(CXX) $(CXXFLAGS_BASE) $(CPU_SERIAL_OBJS) -o $@
+	$(CXX) $(CXXFLAGS_BASE) $(CPU_SERIAL_OBJS) -o $@ -lstdc++fs
 
 $(CPU_BUILD_DIR)/main_cpu_serial.o: $(CPU_MAIN)
 	@mkdir -p $(dir $@)
@@ -118,7 +118,7 @@ $(CPU_BUILD_DIR)/solver_cpu_serial.o: src/cpu/solver_cpu.cpp
 gpu: $(GPU_TARGET)
 
 $(GPU_TARGET): $(GPU_OBJS)
-	$(NVCC) $(NVCCFLAGS) $(GPU_OBJS) -o $@
+	$(NVCC) $(NVCCFLAGS) $(GPU_OBJS) -o $@ -lstdc++fs
 
 $(GPU_BUILD_DIR)/main_gpu.o: $(GPU_MAIN)
 	@mkdir -p $(dir $@)

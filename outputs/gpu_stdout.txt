@@ -1,18 +1,13 @@
-=== GPU Timing Report ===
-case_name                 : shock_bubble
-nx                        : 500
-ny                        : 197
-ng                        : 2
-x_min                     : 0.000000
-x_max                     : 0.225000
-y_min                     : 0.000000
-y_max                     : 0.089000
-cfl                       : 0.400000
-t_end                     : 0.001174
-final_time                : 0.001174
-total_steps               : 6359
-snapshots_written         : 5
+[GPU] Wrote snapshot 1 at t = 0.000234916 -> outputs/gpu_snapshot_1.csv
+[GPU] Wrote snapshot 2 at t = 0.000469817 -> outputs/gpu_snapshot_2.csv
+[GPU] Wrote snapshot 3 at t = 0.000704535 -> outputs/gpu_snapshot_3.csv
+[GPU] Wrote snapshot 4 at t = 0.000939401 -> outputs/gpu_snapshot_4.csv
+[GPU] Wrote snapshot 5 at t = 0.0011741 -> outputs/gpu_snapshot_5.csv
+[GPU] Finished.
+[GPU] Final time = 0.0011741
+[GPU] Total steps = 6359
 
+=== GPU Timing Summary ===
 output_dir_time           : 0.000187 s
 config_and_host_init_time : 0.001749 s
 device_alloc_time         : 0.287945 s
@@ -25,9 +20,9 @@ main_loop_time            : 4.668794 s
   snapshot_download_time  : 0.004775 s
   snapshot_write_time     : 1.071148 s
 total_program_time        : 4.960433 s
-
 avg_time_per_step         : 0.000734 s
 avg_boundary_per_step     : 0.000023 s
 avg_compute_dt_per_step   : 0.000418 s
 avg_advance_per_step      : 0.000122 s
-other_loop_time           : 0.010911 s
+==========================
+[GPU] Timing report written to outputs/gpu_timing.txt
