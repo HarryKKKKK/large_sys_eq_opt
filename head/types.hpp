@@ -16,7 +16,7 @@ struct Conserved {
     double rhov = 0.0;
     double E    = 0.0;
 
-    HD Conserved() = default;
+    HD Conserved() {}
 
     HD Conserved(double rho_, double rhou_, double rhov_, double E_)
         : rho(rho_), rhou(rhou_), rhov(rhov_), E(E_) {}
@@ -28,7 +28,7 @@ struct Primitive {
     double v   = 0.0;
     double p   = 0.0;
 
-    HD Primitive() = default;
+    HD Primitive() {}
 
     HD Primitive(double rho_, double u_, double v_, double p_)
         : rho(rho_), u(u_), v(v_), p(p_) {}
@@ -40,7 +40,7 @@ struct Flux {
     double momy   = 0.0;
     double energy = 0.0;
 
-    HD Flux() = default;
+    HD Flux() {}
 
     HD Flux(double mass_, double momx_, double momy_, double energy_)
         : mass(mass_), momx(momx_), momy(momy_), energy(energy_) {}

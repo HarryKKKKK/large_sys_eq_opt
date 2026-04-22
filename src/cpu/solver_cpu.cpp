@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <vector>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -90,6 +91,7 @@ inline void reconstruct_cell_muscl_hancock(
     U_right_star = enforce_physical_conserved(U_right - half_update, U_right);
 }
 
+// Computes flux at x-interface between cells i and i+1, i.e. F_{i+1/2,j}
 inline Conserved muscl_hancock_flux_x(const Grid2D& U, int i, int j, double dt_over_dx) {
     Conserved Ui_L_star, Ui_R_star;
     Conserved Uip1_L_star, Uip1_R_star;
@@ -109,6 +111,7 @@ inline Conserved muscl_hancock_flux_x(const Grid2D& U, int i, int j, double dt_o
     return hll_flux(Ui_R_star, Uip1_L_star, Direction::X);
 }
 
+// Computes flux at y-interface between cells j and j+1, i.e. G_{i,j+1/2}
 inline Conserved muscl_hancock_flux_y(const Grid2D& U, int i, int j, double dt_over_dy) {
     Conserved Uj_L_star, Uj_R_star;
     Conserved Ujp1_L_star, Ujp1_R_star;
@@ -128,11 +131,29 @@ inline Conserved muscl_hancock_flux_y(const Grid2D& U, int i, int j, double dt_o
     return hll_flux(Uj_R_star, Ujp1_L_star, Direction::Y);
 }
 
-void sweep_x_second_order(const Grid2D& Uin, Grid2D& Uout, double dt) {
+// face-flux cache indexing helpers
+inline int xface_idx(int local_j, int local_i_face, int nx_faces) {
+    return local_j * nx_faces + local_i_face;
+}
+
+inline int yface_idx(int local_j_face, int local_i, int nx_cells) {
+    return local_j_face * nx_cells + local_i;
+}
+
+void compute_x_face_fluxes_second_order(
+    const Grid2D& Uin,
+    double dt,
+    std::vector<Conserved>& fx_cache
+) {
     const int ib = Uin.i_begin();
     const int ie = Uin.i_end();
     const int jb = Uin.j_begin();
     const int je = Uin.j_end();
+
+    const int nx_faces = (ie - ib) + 1; // interfaces: i = ib-1 ... ie-1
+    const int ny_cells = (je - jb);
+
+    fx_cache.resize(nx_faces * ny_cells);
 
     const double dt_over_dx = dt / Uin.dx();
 
@@ -140,9 +161,71 @@ void sweep_x_second_order(const Grid2D& Uin, Grid2D& Uout, double dt) {
 #pragma omp parallel for collapse(2) schedule(static)
 #endif
     for (int j = jb; j < je; ++j) {
+        for (int i = ib - 1; i < ie; ++i) {
+            const int local_j = j - jb;
+            const int local_i_face = i - (ib - 1);
+            fx_cache[xface_idx(local_j, local_i_face, nx_faces)] =
+                muscl_hancock_flux_x(Uin, i, j, dt_over_dx);
+        }
+    }
+}
+
+void compute_y_face_fluxes_second_order(
+    const Grid2D& Uin,
+    double dt,
+    std::vector<Conserved>& fy_cache
+) {
+    const int ib = Uin.i_begin();
+    const int ie = Uin.i_end();
+    const int jb = Uin.j_begin();
+    const int je = Uin.j_end();
+
+    const int nx_cells = (ie - ib);
+    const int ny_faces = (je - jb) + 1; // interfaces: j = jb-1 ... je-1
+
+    fy_cache.resize(nx_cells * ny_faces);
+
+    const double dt_over_dy = dt / Uin.dy();
+
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) schedule(static)
+#endif
+    for (int j = jb - 1; j < je; ++j) {
         for (int i = ib; i < ie; ++i) {
-            const Conserved Fx_p = muscl_hancock_flux_x(Uin, i,     j, dt_over_dx);
-            const Conserved Fx_m = muscl_hancock_flux_x(Uin, i - 1, j, dt_over_dx);
+            const int local_j_face = j - (jb - 1);
+            const int local_i = i - ib;
+            fy_cache[yface_idx(local_j_face, local_i, nx_cells)] =
+                muscl_hancock_flux_y(Uin, i, j, dt_over_dy);
+        }
+    }
+}
+
+void sweep_x_second_order(const Grid2D& Uin, Grid2D& Uout, double dt) {
+    const int ib = Uin.i_begin();
+    const int ie = Uin.i_end();
+    const int jb = Uin.j_begin();
+    const int je = Uin.j_end();
+
+    const int nx_faces = (ie - ib) + 1;
+    const double dt_over_dx = dt / Uin.dx();
+
+    std::vector<Conserved> fx_cache;
+    compute_x_face_fluxes_second_order(Uin, dt, fx_cache);
+
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) schedule(static)
+#endif
+    for (int j = jb; j < je; ++j) {
+        for (int i = ib; i < ie; ++i) {
+            const int local_j = j - jb;
+
+            // left face = i - 1/2  => interface index i-1
+            // right face = i + 1/2 => interface index i
+            const int local_i_face_m = (i - 1) - (ib - 1);
+            const int local_i_face_p = i - (ib - 1);
+
+            const Conserved& Fx_m = fx_cache[xface_idx(local_j, local_i_face_m, nx_faces)];
+            const Conserved& Fx_p = fx_cache[xface_idx(local_j, local_i_face_p, nx_faces)];
 
             Uout(i, j) = Uin(i, j) - dt_over_dx * (Fx_p - Fx_m);
         }
@@ -155,22 +238,33 @@ void sweep_y_second_order(const Grid2D& Uin, Grid2D& Uout, double dt) {
     const int jb = Uin.j_begin();
     const int je = Uin.j_end();
 
+    const int nx_cells = (ie - ib);
     const double dt_over_dy = dt / Uin.dy();
+
+    std::vector<Conserved> fy_cache;
+    compute_y_face_fluxes_second_order(Uin, dt, fy_cache);
 
 #ifdef _OPENMP
 #pragma omp parallel for collapse(2) schedule(static)
 #endif
     for (int j = jb; j < je; ++j) {
         for (int i = ib; i < ie; ++i) {
-            const Conserved Fy_p = muscl_hancock_flux_y(Uin, i, j,     dt_over_dy);
-            const Conserved Fy_m = muscl_hancock_flux_y(Uin, i, j - 1, dt_over_dy);
+            const int local_i = i - ib;
+
+            // bottom face = j - 1/2 => interface index j-1
+            // top face    = j + 1/2 => interface index j
+            const int local_j_face_m = (j - 1) - (jb - 1);
+            const int local_j_face_p = j - (jb - 1);
+
+            const Conserved& Fy_m = fy_cache[yface_idx(local_j_face_m, local_i, nx_cells)];
+            const Conserved& Fy_p = fy_cache[yface_idx(local_j_face_p, local_i, nx_cells)];
 
             Uout(i, j) = Uin(i, j) - dt_over_dy * (Fy_p - Fy_m);
         }
     }
 }
 
-} // namespace
+}
 
 double compute_dt(const Grid2D& grid, double cfl) {
     double max_speed = 0.0;
