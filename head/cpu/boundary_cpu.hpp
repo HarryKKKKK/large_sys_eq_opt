@@ -10,7 +10,6 @@ inline void apply_transmissive_boundary(Grid2D& grid) {
     const int je = grid.j_end();
 
     const int total_nx = grid.total_nx();
-    // const int total_ny = grid.total_ny();
 
     for (int j = jb; j < je; ++j) {
         // Left

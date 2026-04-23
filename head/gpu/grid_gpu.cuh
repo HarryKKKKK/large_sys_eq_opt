@@ -58,14 +58,6 @@ public:
         dx__ = 0.0;  dy__ = 0.0;
     }
 
-    void fill_zero() {
-        const std::size_t bytes = num_cells() * sizeof(double);
-        cudaMemset(rho_,  0, bytes);
-        cudaMemset(rhou_, 0, bytes);
-        cudaMemset(rhov_, 0, bytes);
-        cudaMemset(E_,    0, bytes);
-    }
-
     int nx() const { return nx__; }
     int ny() const { return ny__; }
     int ng() const { return ng__; }
@@ -82,16 +74,6 @@ public:
     int j_begin() const { return ng__; }
     int j_end()   const { return ng__ + ny__; }
 
-    double x_center(int i) const {
-        return x_min__ + (static_cast<double>(i - ng__) + 0.5) * dx__;
-    }
-    double y_center(int j) const {
-        return y_min__ + (static_cast<double>(j - ng__) + 0.5) * dy__;
-    }
-
-    std::size_t flat_index(int i, int j) const {
-        return static_cast<std::size_t>(j * total_nx() + i);
-    }
     std::size_t num_cells() const {
         return static_cast<std::size_t>(total_nx()) * total_ny();
     }
