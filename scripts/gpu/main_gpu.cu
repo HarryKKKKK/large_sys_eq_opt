@@ -28,6 +28,7 @@ struct TimingStats {
     double output_dir_time = 0.0;
     double config_and_host_init_time = 0.0;
     double device_alloc_time = 0.0;
+    double workspace_alloc_time = 0.0;
     double upload_h2d_time = 0.0;
     double snapshot_schedule_time = 0.0;
 
@@ -125,6 +126,7 @@ void write_timing_report(const std::string& filename,
     out << "output_dir_time           : " << ts.output_dir_time << " s\n";
     out << "config_and_host_init_time : " << ts.config_and_host_init_time << " s\n";
     out << "device_alloc_time         : " << ts.device_alloc_time << " s\n";
+    out << "workspace_alloc_time      : " << ts.workspace_alloc_time << " s\n";
     out << "upload_h2d_time           : " << ts.upload_h2d_time << " s\n";
     out << "snapshot_schedule_time    : " << ts.snapshot_schedule_time << " s\n";
     out << "main_loop_time            : " << ts.main_loop_time << " s\n";
@@ -165,6 +167,7 @@ void print_timing_report(const TimingStats& ts, int step) {
     std::cout << "output_dir_time           : " << ts.output_dir_time << " s\n";
     std::cout << "config_and_host_init_time : " << ts.config_and_host_init_time << " s\n";
     std::cout << "device_alloc_time         : " << ts.device_alloc_time << " s\n";
+    std::cout << "workspace_alloc_time      : " << ts.workspace_alloc_time << " s\n";
     std::cout << "upload_h2d_time           : " << ts.upload_h2d_time << " s\n";
     std::cout << "snapshot_schedule_time    : " << ts.snapshot_schedule_time << " s\n";
     std::cout << "main_loop_time            : " << ts.main_loop_time << " s\n";
@@ -214,6 +217,7 @@ int main() {
     Grid2DGPU d_U;
     Grid2DGPU d_U_mid;
     Grid2DGPU d_U_next;
+    GpuWorkspace ws;
 
     {
         const auto t0 = Clock::now();
@@ -240,6 +244,17 @@ int main() {
 
         const auto t1 = Clock::now();
         timings.device_alloc_time = Seconds(t1 - t0).count();
+    }
+
+    {
+        const auto t0 = Clock::now();
+
+        init_gpu_workspace(ws, d_U);
+
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        const auto t1 = Clock::now();
+        timings.workspace_alloc_time = Seconds(t1 - t0).count();
     }
 
     {
@@ -279,24 +294,21 @@ int main() {
 
     while (t < cfg.t_end) {
         {
-            CUDA_CHECK(cudaDeviceSynchronize());
             const auto t0 = Clock::now();
 
             apply_transmissive_boundary_gpu(d_U);
-
             CUDA_CHECK(cudaDeviceSynchronize());
+
             const auto t1 = Clock::now();
             timings.boundary_time += Seconds(t1 - t0).count();
         }
 
         double dt = 0.0;
         {
-            CUDA_CHECK(cudaDeviceSynchronize());
             const auto t0 = Clock::now();
 
-            dt = compute_dt_gpu(d_U, cfg.cfl);
+            dt = compute_dt_gpu(d_U, ws, cfg.cfl);
 
-            CUDA_CHECK(cudaDeviceSynchronize());
             const auto t1 = Clock::now();
             timings.compute_dt_time += Seconds(t1 - t0).count();
         }
@@ -306,13 +318,12 @@ int main() {
         }
 
         {
-            CUDA_CHECK(cudaDeviceSynchronize());
             const auto t0 = Clock::now();
 
-            advance_second_order_gpu(d_U, d_U_mid, d_U_next, dt);
+            advance_second_order_gpu(d_U, d_U_mid, d_U_next, ws, dt);
+            CUDA_CHECK(cudaDeviceSynchronize());
             d_U.swap(d_U_next);
 
-            CUDA_CHECK(cudaDeviceSynchronize());
             const auto t1 = Clock::now();
             timings.advance_time += Seconds(t1 - t0).count();
         }
@@ -324,7 +335,6 @@ int main() {
             std::vector<Conserved> host_snapshot;
 
             {
-                CUDA_CHECK(cudaDeviceSynchronize());
                 const auto t0 = Clock::now();
 
                 d_U.download_to_aos(host_snapshot);
@@ -362,6 +372,11 @@ int main() {
     CUDA_CHECK(cudaDeviceSynchronize());
     const auto loop_end = Clock::now();
     timings.main_loop_time = Seconds(loop_end - loop_start).count();
+
+    {
+        free_gpu_workspace(ws);
+        CUDA_CHECK(cudaDeviceSynchronize());
+    }
 
     CUDA_CHECK(cudaDeviceSynchronize());
     const auto program_end = Clock::now();

@@ -12,6 +12,11 @@
 
 set -euo pipefail
 
+nvidia-smi
+nvidia-smi --query-gpu=name,compute_cap --format=csv
+nvcc --version
+module list
+
 cd ~/rds/hpc-work/large_sys_eq_opt
 mkdir -p logs outputs
 

@@ -3,9 +3,11 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <vector>
+#include <stdexcept>
+#include <string>
 
 #include <cuda_runtime.h>
+#include <cub/cub.cuh>
 
 #include "gpu/boundary_gpu.cuh"
 #include "physics.hpp"
@@ -19,13 +21,12 @@ constexpr double kPFloor   = 1.0e-12;
 
 inline void check_cuda(cudaError_t err, const char* call, const char* file, int line) {
     if (err != cudaSuccess) {
-        throw std::runtime_error(
-            std::string("CUDA error at ") + file + ":" + std::to_string(line) +
-            " in " + call + " : " + cudaGetErrorString(err)
-        );
+        std::cerr << "CUDA error at " << file << ":" << line
+                  << " in " << call
+                  << " : " << cudaGetErrorString(err) << "\n";
+        std::exit(EXIT_FAILURE);
     }
 }
-
 #define CUDA_CHECK(call) check_cuda((call), #call, __FILE__, __LINE__)
 
 __device__ inline double minmod_gpu(double a, double b) {
@@ -66,11 +67,6 @@ __device__ inline Conserved load_state(const ConstGrid2DGPUView& U, int i, int j
     return Conserved(U.rho[idx], U.rhou[idx], U.rhov[idx], U.E[idx]);
 }
 
-__device__ inline Conserved load_state(const Grid2DGPUView& U, int i, int j) {
-    const int idx = U.flat_index(i, j);
-    return Conserved(U.rho[idx], U.rhou[idx], U.rhov[idx], U.E[idx]);
-}
-
 __device__ inline Primitive limited_slope_gpu(const Primitive& Wm,
                                               const Primitive& Wc,
                                               const Primitive& Wp) {
@@ -106,11 +102,8 @@ __device__ inline void reconstruct_cell_muscl_hancock_gpu(
 
     const Conserved half_update = 0.5 * dt_over_d * (F_right - F_left);
 
-    U_left_star  = U_left  - half_update;
-    U_right_star = U_right - half_update;
-
-    U_left_star  = enforce_physical_conserved_gpu(U_left_star,  U_left);
-    U_right_star = enforce_physical_conserved_gpu(U_right_star, U_right);
+    U_left_star  = enforce_physical_conserved_gpu(U_left  - half_update, U_left);
+    U_right_star = enforce_physical_conserved_gpu(U_right - half_update, U_right);
 }
 
 __device__ inline Conserved muscl_hancock_flux_x_gpu(const ConstGrid2DGPUView& U, int i, int j, double dt) {
@@ -242,7 +235,7 @@ __global__ void compute_x_face_fluxes_kernel(
         return;
     }
 
-    const int i = (Uin.i_begin() - 1) + local_i_face;  // face between i and i+1
+    const int i = (Uin.i_begin() - 1) + local_i_face;
     const int j = Uin.j_begin() + local_j;
 
     const Conserved F = muscl_hancock_flux_x_gpu(Uin, i, j, dt);
@@ -274,8 +267,8 @@ __global__ void update_from_x_face_fluxes_kernel(
     const int j = Uin.j_begin() + local_j;
 
     const int nx_faces = Uin.nx + 1;
-    const int idx_m = xface_idx(local_j, local_i,     nx_faces); // i-1/2
-    const int idx_p = xface_idx(local_j, local_i + 1, nx_faces); // i+1/2
+    const int idx_m = xface_idx(local_j, local_i,     nx_faces);
+    const int idx_p = xface_idx(local_j, local_i + 1, nx_faces);
 
     const Conserved Fx_m(fx_mass[idx_m], fx_momx[idx_m], fx_momy[idx_m], fx_energy[idx_m]);
     const Conserved Fx_p(fx_mass[idx_p], fx_momx[idx_p], fx_momy[idx_p], fx_energy[idx_p]);
@@ -301,7 +294,6 @@ __global__ void compute_y_face_fluxes_kernel(
 ) {
     const int local_i = blockIdx.x * blockDim.x + threadIdx.x;
     const int local_j_face = blockIdx.y * blockDim.y + threadIdx.y;
-
     const int ny_faces = Uin.ny + 1;
 
     if (local_i >= Uin.nx || local_j_face >= ny_faces) {
@@ -309,7 +301,7 @@ __global__ void compute_y_face_fluxes_kernel(
     }
 
     const int i = Uin.i_begin() + local_i;
-    const int j = (Uin.j_begin() - 1) + local_j_face; // face between j and j+1
+    const int j = (Uin.j_begin() - 1) + local_j_face;
 
     const Conserved F = muscl_hancock_flux_y_gpu(Uin, i, j, dt);
     const int idx = yface_idx(local_j_face, local_i, Uin.nx);
@@ -339,8 +331,8 @@ __global__ void update_from_y_face_fluxes_kernel(
     const int i = Uin.i_begin() + local_i;
     const int j = Uin.j_begin() + local_j;
 
-    const int idx_m = yface_idx(local_j,     local_i, Uin.nx); // j-1/2
-    const int idx_p = yface_idx(local_j + 1, local_i, Uin.nx); // j+1/2
+    const int idx_m = yface_idx(local_j,     local_i, Uin.nx);
+    const int idx_p = yface_idx(local_j + 1, local_i, Uin.nx);
 
     const Conserved Fy_m(fy_mass[idx_m], fy_momx[idx_m], fy_momy[idx_m], fy_energy[idx_m]);
     const Conserved Fy_p(fy_mass[idx_p], fy_momx[idx_p], fy_momy[idx_p], fy_energy[idx_p]);
@@ -358,12 +350,60 @@ __global__ void update_from_y_face_fluxes_kernel(
 
 } // namespace
 
-double compute_dt_gpu(const Grid2DGPU& grid, double cfl) {
-    const std::size_t n = grid.num_cells();
+void init_gpu_workspace(GpuWorkspace& ws, const Grid2DGPU& grid) {
+    free_gpu_workspace(ws);
 
-    double* speed_d = nullptr;
-    CUDA_CHECK(cudaMalloc(&speed_d, n * sizeof(double)));
-    CUDA_CHECK(cudaMemset(speed_d, 0, n * sizeof(double)));
+    ws.nx = grid.nx();
+    ws.ny = grid.ny();
+
+    const std::size_t total_cells = grid.num_cells();
+    const std::size_t num_xfaces = static_cast<std::size_t>(grid.nx() + 1) * grid.ny();
+    const std::size_t num_yfaces = static_cast<std::size_t>(grid.ny() + 1) * grid.nx();
+
+    CUDA_CHECK(cudaMalloc(&ws.speed_d, total_cells * sizeof(double)));
+    CUDA_CHECK(cudaMalloc(&ws.max_speed_d, sizeof(double)));
+
+    CUDA_CHECK(cudaMalloc(&ws.fx_mass,   num_xfaces * sizeof(double)));
+    CUDA_CHECK(cudaMalloc(&ws.fx_momx,   num_xfaces * sizeof(double)));
+    CUDA_CHECK(cudaMalloc(&ws.fx_momy,   num_xfaces * sizeof(double)));
+    CUDA_CHECK(cudaMalloc(&ws.fx_energy, num_xfaces * sizeof(double)));
+
+    CUDA_CHECK(cudaMalloc(&ws.fy_mass,   num_yfaces * sizeof(double)));
+    CUDA_CHECK(cudaMalloc(&ws.fy_momx,   num_yfaces * sizeof(double)));
+    CUDA_CHECK(cudaMalloc(&ws.fy_momy,   num_yfaces * sizeof(double)));
+    CUDA_CHECK(cudaMalloc(&ws.fy_energy, num_yfaces * sizeof(double)));
+
+    ws.reduce_tmp_bytes = 0;
+    cub::DeviceReduce::Max(nullptr,
+                           ws.reduce_tmp_bytes,
+                           ws.speed_d,
+                           ws.max_speed_d,
+                           total_cells);
+    CUDA_CHECK(cudaMalloc(&ws.reduce_tmp, ws.reduce_tmp_bytes));
+}
+
+void free_gpu_workspace(GpuWorkspace& ws) {
+    if (ws.speed_d)      CUDA_CHECK(cudaFree(ws.speed_d));
+    if (ws.max_speed_d)  CUDA_CHECK(cudaFree(ws.max_speed_d));
+    if (ws.reduce_tmp)   CUDA_CHECK(cudaFree(ws.reduce_tmp));
+
+    if (ws.fx_mass)      CUDA_CHECK(cudaFree(ws.fx_mass));
+    if (ws.fx_momx)      CUDA_CHECK(cudaFree(ws.fx_momx));
+    if (ws.fx_momy)      CUDA_CHECK(cudaFree(ws.fx_momy));
+    if (ws.fx_energy)    CUDA_CHECK(cudaFree(ws.fx_energy));
+
+    if (ws.fy_mass)      CUDA_CHECK(cudaFree(ws.fy_mass));
+    if (ws.fy_momx)      CUDA_CHECK(cudaFree(ws.fy_momx));
+    if (ws.fy_momy)      CUDA_CHECK(cudaFree(ws.fy_momy));
+    if (ws.fy_energy)    CUDA_CHECK(cudaFree(ws.fy_energy));
+
+    ws = GpuWorkspace{};
+}
+
+double compute_dt_gpu(const Grid2DGPU& grid, GpuWorkspace& ws, double cfl) {
+    if (ws.nx != grid.nx() || ws.ny != grid.ny() || ws.speed_d == nullptr) {
+        throw std::runtime_error("compute_dt_gpu: workspace not initialized for this grid.");
+    }
 
     const dim3 threads(16, 16);
     const dim3 blocks(
@@ -371,28 +411,24 @@ double compute_dt_gpu(const Grid2DGPU& grid, double cfl) {
         (grid.ny() + threads.y - 1) / threads.y
     );
 
-    compute_local_speed_kernel<<<blocks, threads>>>(make_view(grid), speed_d);
+    compute_local_speed_kernel<<<blocks, threads>>>(make_view(grid), ws.speed_d);
     CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
 
-    std::vector<double> speed_h(n, 0.0);
-    CUDA_CHECK(cudaMemcpy(speed_h.data(), speed_d, n * sizeof(double), cudaMemcpyDeviceToHost));
-    CUDA_CHECK(cudaFree(speed_d));
+    cub::DeviceReduce::Max(ws.reduce_tmp,
+                           ws.reduce_tmp_bytes,
+                           ws.speed_d,
+                           ws.max_speed_d,
+                           grid.num_cells());
+    CUDA_CHECK(cudaGetLastError());
 
     double max_speed = 0.0;
-    for (int j = grid.j_begin(); j < grid.j_end(); ++j) {
-        for (int i = grid.i_begin(); i < grid.i_end(); ++i) {
-            max_speed = std::max(max_speed, speed_h[grid.flat_index(i, j)]);
-        }
-    }
+    CUDA_CHECK(cudaMemcpy(&max_speed, ws.max_speed_d, sizeof(double), cudaMemcpyDeviceToHost));
 
     if (max_speed <= 0.0) {
         return std::numeric_limits<double>::max();
     }
 
-    const double dt_x = grid.dx() / max_speed;
-    const double dt_y = grid.dy() / max_speed;
-    return cfl * std::min(dt_x, dt_y);
+    return cfl * std::min(grid.dx(), grid.dy()) / max_speed;
 }
 
 void advance_first_order_gpu(const Grid2DGPU& Uold, Grid2DGPU& Unew, double dt) {
@@ -404,15 +440,21 @@ void advance_first_order_gpu(const Grid2DGPU& Uold, Grid2DGPU& Unew, double dt) 
 
     advance_first_order_kernel<<<blocks, threads>>>(make_view(Uold), make_view(Unew), dt);
     CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
+
     apply_transmissive_boundary_gpu(Unew);
 }
 
 void advance_second_order_gpu(const Grid2DGPU& Uold,
                               Grid2DGPU& Utmp,
                               Grid2DGPU& Unew,
+                              GpuWorkspace& ws,
                               double dt) {
+    if (ws.nx != Uold.nx() || ws.ny != Uold.ny() || ws.fx_mass == nullptr || ws.fy_mass == nullptr) {
+        throw std::runtime_error("advance_second_order_gpu: workspace not initialized for this grid.");
+    }
+
     const dim3 threads(16, 16);
+
     const dim3 cell_blocks(
         (Uold.nx() + threads.x - 1) / threads.x,
         (Uold.ny() + threads.y - 1) / threads.y
@@ -428,55 +470,27 @@ void advance_second_order_gpu(const Grid2DGPU& Uold,
         ((Uold.ny() + 1) + threads.y - 1) / threads.y
     );
 
-    const std::size_t num_xfaces = static_cast<std::size_t>(Uold.nx() + 1) * Uold.ny();
-    const std::size_t num_yfaces = static_cast<std::size_t>(Uold.ny() + 1) * Uold.nx();
-
-    double *fx_mass = nullptr, *fx_momx = nullptr, *fx_momy = nullptr, *fx_energy = nullptr;
-    double *fy_mass = nullptr, *fy_momx = nullptr, *fy_momy = nullptr, *fy_energy = nullptr;
-
-    CUDA_CHECK(cudaMalloc(&fx_mass,   num_xfaces * sizeof(double)));
-    CUDA_CHECK(cudaMalloc(&fx_momx,   num_xfaces * sizeof(double)));
-    CUDA_CHECK(cudaMalloc(&fx_momy,   num_xfaces * sizeof(double)));
-    CUDA_CHECK(cudaMalloc(&fx_energy, num_xfaces * sizeof(double)));
-
-    CUDA_CHECK(cudaMalloc(&fy_mass,   num_yfaces * sizeof(double)));
-    CUDA_CHECK(cudaMalloc(&fy_momx,   num_yfaces * sizeof(double)));
-    CUDA_CHECK(cudaMalloc(&fy_momy,   num_yfaces * sizeof(double)));
-    CUDA_CHECK(cudaMalloc(&fy_energy, num_yfaces * sizeof(double)));
-
     compute_x_face_fluxes_kernel<<<xface_blocks, threads>>>(
-        make_view(Uold), dt, fx_mass, fx_momx, fx_momy, fx_energy
+        make_view(static_cast<const Grid2DGPU&>(Uold)), dt,
+        ws.fx_mass, ws.fx_momx, ws.fx_momy, ws.fx_energy
     );
-    CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
 
     update_from_x_face_fluxes_kernel<<<cell_blocks, threads>>>(
-        make_view(Uold), make_view(Utmp), dt, fx_mass, fx_momx, fx_momy, fx_energy
+        make_view(static_cast<const Grid2DGPU&>(Uold)), make_view(Utmp), dt,
+        ws.fx_mass, ws.fx_momx, ws.fx_momy, ws.fx_energy
     );
-    CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
+
     apply_transmissive_boundary_gpu(Utmp);
 
     compute_y_face_fluxes_kernel<<<yface_blocks, threads>>>(
-        make_view(Utmp), dt, fy_mass, fy_momx, fy_momy, fy_energy
+        make_view(static_cast<const Grid2DGPU&>(Utmp)), dt,
+        ws.fy_mass, ws.fy_momx, ws.fy_momy, ws.fy_energy
     );
-    CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
 
     update_from_y_face_fluxes_kernel<<<cell_blocks, threads>>>(
-        make_view(Utmp), make_view(Unew), dt, fy_mass, fy_momx, fy_momy, fy_energy
+        make_view(static_cast<const Grid2DGPU&>(Utmp)), make_view(Unew), dt,
+        ws.fy_mass, ws.fy_momx, ws.fy_momy, ws.fy_energy
     );
-    CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
+
     apply_transmissive_boundary_gpu(Unew);
-
-    CUDA_CHECK(cudaFree(fx_mass));
-    CUDA_CHECK(cudaFree(fx_momx));
-    CUDA_CHECK(cudaFree(fx_momy));
-    CUDA_CHECK(cudaFree(fx_energy));
-
-    CUDA_CHECK(cudaFree(fy_mass));
-    CUDA_CHECK(cudaFree(fy_momx));
-    CUDA_CHECK(cudaFree(fy_momy));
-    CUDA_CHECK(cudaFree(fy_energy));
 }

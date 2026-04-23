@@ -1,0 +1,2 @@
+/var/spool/slurm/slurmd/job28251335/slurm_script: line 18: 2556284 Illegal instruction     ./main_gpu
+     2556286 Done                    | tee outputs/gpu_stdout.txt
