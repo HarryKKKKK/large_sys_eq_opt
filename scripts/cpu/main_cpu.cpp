@@ -1,19 +1,18 @@
 #include "cpu/boundary_cpu.hpp"
 #include "cpu/grid_cpu.hpp"
-#include "init.hpp"
 #include "cpu/solver_cpu.hpp"
+#include "init.hpp"
 #include "test_cases.hpp"
 #include "types.hpp"
 
+#include <algorithm>
 #include <chrono>
-#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
-#include <algorithm>
 
 namespace {
 
@@ -34,10 +33,6 @@ struct TimingStats {
     double total_program_time = 0.0;
 };
 
-void ensure_output_dir() {
-    std::filesystem::create_directories("outputs");
-}
-
 std::string make_snapshot_name(const std::string& prefix, int snap_id) {
     std::ostringstream oss;
     oss << "outputs/" << prefix << "_snapshot_" << snap_id << ".csv";
@@ -52,11 +47,18 @@ std::string make_timing_name(const std::string& prefix) {
 
 void write_grid_csv(const Grid2D& grid, const std::string& filename) {
     std::ofstream out(filename);
+
+    if (!out) {
+        std::cerr << "Failed to open output file: " << filename << "\n";
+        std::exit(EXIT_FAILURE);
+    }
+
     out << "i,j,x,y,rho,rhou,rhov,E\n";
 
     for (int j = grid.j_begin(); j < grid.j_end(); ++j) {
         for (int i = grid.i_begin(); i < grid.i_end(); ++i) {
             const Conserved& U = grid(i, j);
+
             out << i << ","
                 << j << ","
                 << grid.x_center(i) << ","
@@ -77,6 +79,11 @@ void write_timing_report(const std::string& filename,
                          int num_snapshots_written,
                          const TimingStats& ts) {
     std::ofstream out(filename);
+
+    if (!out) {
+        std::cerr << "Failed to open timing file: " << filename << "\n";
+        std::exit(EXIT_FAILURE);
+    }
 
     out << std::fixed << std::setprecision(6);
 
@@ -110,17 +117,21 @@ void write_timing_report(const std::string& filename,
     if (step > 0) {
         out << "avg_time_per_step      : " << (ts.main_loop_time / step) << " s\n";
         out << "avg_boundary_per_step  : " << (ts.boundary_time / step) << " s\n";
-        out << "avg_compute_dt_step    : " << (ts.compute_dt_time / step) << " s\n";
+        out << "avg_compute_dt_per_step: " << (ts.compute_dt_time / step) << " s\n";
         out << "avg_advance_per_step   : " << (ts.advance_time / step) << " s\n";
     } else {
         out << "avg_time_per_step      : 0.000000 s\n";
         out << "avg_boundary_per_step  : 0.000000 s\n";
-        out << "avg_compute_dt_step    : 0.000000 s\n";
+        out << "avg_compute_dt_per_step: 0.000000 s\n";
         out << "avg_advance_per_step   : 0.000000 s\n";
     }
 
     const double measured_loop_parts =
-        ts.boundary_time + ts.compute_dt_time + ts.advance_time + ts.snapshot_write_time;
+        ts.boundary_time +
+        ts.compute_dt_time +
+        ts.advance_time +
+        ts.snapshot_write_time;
+
     out << "other_loop_time        : "
         << std::max(0.0, ts.main_loop_time - measured_loop_parts) << " s\n";
 }
@@ -141,24 +152,18 @@ void print_timing_report(const TimingStats& ts, int step) {
     if (step > 0) {
         std::cout << "avg_time_per_step      : " << (ts.main_loop_time / step) << " s\n";
         std::cout << "avg_boundary_per_step  : " << (ts.boundary_time / step) << " s\n";
-        std::cout << "avg_compute_dt_step    : " << (ts.compute_dt_time / step) << " s\n";
+        std::cout << "avg_compute_dt_per_step: " << (ts.compute_dt_time / step) << " s\n";
         std::cout << "avg_advance_per_step   : " << (ts.advance_time / step) << " s\n";
     }
+
     std::cout << "==========================\n";
 }
 
-}
+} // namespace
 
 int main() {
     const auto program_start = Clock::now();
     TimingStats timings;
-
-    {
-        const auto t0 = Clock::now();
-        ensure_output_dir();
-        const auto t1 = Clock::now();
-        timings.output_dir_time = Seconds(t1 - t0).count();
-    }
 
     const std::string case_name = "shock_bubble";
     CaseConfig cfg;
@@ -170,7 +175,6 @@ int main() {
         const auto t0 = Clock::now();
 
         cfg = get_case_config(case_name);
-
         U = make_initial_grid(case_name);
 
         U_mid = Grid2D(
@@ -213,7 +217,9 @@ int main() {
     while (t < cfg.t_end) {
         {
             const auto t0 = Clock::now();
+
             apply_transmissive_boundary(U);
+
             const auto t1 = Clock::now();
             timings.boundary_time += Seconds(t1 - t0).count();
         }
@@ -221,7 +227,9 @@ int main() {
         double dt = 0.0;
         {
             const auto t0 = Clock::now();
+
             dt = compute_dt(U, cfg.cfl);
+
             const auto t1 = Clock::now();
             timings.compute_dt_time += Seconds(t1 - t0).count();
         }
@@ -232,8 +240,10 @@ int main() {
 
         {
             const auto t0 = Clock::now();
+
             advance_second_order(U, U_mid, U_next, dt);
             std::swap(U, U_next);
+
             const auto t1 = Clock::now();
             timings.advance_time += Seconds(t1 - t0).count();
         }
@@ -242,13 +252,16 @@ int main() {
         ++step;
 
         while (next_snapshot < num_snapshots && t >= snapshot_times[next_snapshot]) {
-            const auto t0 = Clock::now();
-
             const std::string filename = make_snapshot_name("cpu", next_snapshot + 1);
-            write_grid_csv(U, filename);
 
-            const auto t1 = Clock::now();
-            timings.snapshot_write_time += Seconds(t1 - t0).count();
+            {
+                const auto t0 = Clock::now();
+
+                write_grid_csv(U, filename);
+
+                const auto t1 = Clock::now();
+                timings.snapshot_write_time += Seconds(t1 - t0).count();
+            }
 
             std::cout << "[CPU] Wrote snapshot " << (next_snapshot + 1)
                       << " at t = " << t

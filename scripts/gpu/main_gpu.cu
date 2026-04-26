@@ -11,7 +11,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -52,10 +51,6 @@ inline void cuda_check(cudaError_t err, const char* call, const char* file, int 
 
 #define CUDA_CHECK(call) cuda_check((call), #call, __FILE__, __LINE__)
 
-void ensure_output_dir() {
-    std::filesystem::create_directories("outputs");
-}
-
 std::string make_snapshot_name(const std::string& prefix, int snap_id) {
     std::ostringstream oss;
     oss << "outputs/" << prefix << "_snapshot_" << snap_id << ".csv";
@@ -74,6 +69,12 @@ void write_aos_csv(const std::vector<Conserved>& data,
                    double dx, double dy,
                    const std::string& filename) {
     std::ofstream out(filename);
+
+    if (!out) {
+        std::cerr << "Failed to open output file: " << filename << "\n";
+        std::exit(EXIT_FAILURE);
+    }
+
     out << "i,j,x,y,rho,rhou,rhov,E\n";
 
     const int total_nx = nx + 2 * ng;
@@ -104,6 +105,12 @@ void write_timing_report(const std::string& filename,
                          int num_snapshots_written,
                          const TimingStats& ts) {
     std::ofstream out(filename);
+
+    if (!out) {
+        std::cerr << "Failed to open timing file: " << filename << "\n";
+        std::exit(EXIT_FAILURE);
+    }
+
     out << std::fixed << std::setprecision(6);
 
     out << "=== GPU Timing Report ===\n";
@@ -181,6 +188,7 @@ void print_timing_report(const TimingStats& ts, int step) {
         std::cout << "avg_compute_dt_per_step   : " << (ts.compute_dt_time / step) << " s\n";
         std::cout << "avg_advance_per_step      : " << (ts.advance_time / step) << " s\n";
     }
+
     std::cout << "==========================\n";
 }
 
@@ -189,13 +197,6 @@ void print_timing_report(const TimingStats& ts, int step) {
 int main() {
     const auto program_start = Clock::now();
     TimingStats timings;
-
-    {
-        const auto t0 = Clock::now();
-        ensure_output_dir();
-        const auto t1 = Clock::now();
-        timings.output_dir_time = Seconds(t1 - t0).count();
-    }
 
     const std::string case_name = "shock_bubble";
     CaseConfig cfg;
@@ -274,22 +275,25 @@ int main() {
     const double dx = (cfg.x_max - cfg.x_min) / static_cast<double>(cfg.nx);
     const double dy = (cfg.y_max - cfg.y_min) / static_cast<double>(cfg.ny);
 
+    // Initial boundary update only.
+    // The per-step boundary update is handled inside advance_second_order_gpu().
+    {
+        CUDA_CHECK(cudaDeviceSynchronize());
+        const auto t0 = Clock::now();
+
+        apply_transmissive_boundary_gpu(d_U);
+
+        CUDA_CHECK(cudaDeviceSynchronize());
+        const auto t1 = Clock::now();
+        timings.boundary_time += Seconds(t1 - t0).count();
+    }
+
     CUDA_CHECK(cudaDeviceSynchronize());
     const auto loop_start = Clock::now();
 
     while (t < cfg.t_end) {
-        {
-            CUDA_CHECK(cudaDeviceSynchronize());
-            const auto t0 = Clock::now();
-
-            apply_transmissive_boundary_gpu(d_U);
-
-            CUDA_CHECK(cudaDeviceSynchronize());
-            const auto t1 = Clock::now();
-            timings.boundary_time += Seconds(t1 - t0).count();
-        }
-
         double dt = 0.0;
+
         {
             CUDA_CHECK(cudaDeviceSynchronize());
             const auto t0 = Clock::now();

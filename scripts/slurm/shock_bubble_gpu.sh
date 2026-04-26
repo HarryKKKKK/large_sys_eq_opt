@@ -1,105 +1,132 @@
 #!/bin/bash
-#SBATCH --exclude=gpu-q-43
-#SBATCH -J sys_eq_gpu_nsys_check
 #SBATCH -A MPHIL-NIKIFORAKIS-HK597-SL2-GPU
 #SBATCH -p ampere
 #SBATCH -N 1
-#SBATCH -n 1
-#SBATCH -c 8
+#SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
-#SBATCH --time=00:40:00
-#SBATCH --output=/home/hk597/rds/hpc-work/large_sys_eq_opt/logs/%x_%j.out
-#SBATCH --error=/home/hk597/rds/hpc-work/large_sys_eq_opt/logs/%x_%j.err
+#SBATCH -t 02:00:00
+#SBATCH -J sys_eq_nsys_qdrep
+#SBATCH -o /rds/user/hk597/hpc-work/large_sys_eq_opt/logs/%x_%j.log
+#SBATCH -e /rds/user/hk597/hpc-work/large_sys_eq_opt/logs/%x_%j.log
 
 set -euo pipefail
 
-cd /home/hk597/rds/hpc-work/large_sys_eq_opt
+WORKDIR=/rds/user/hk597/hpc-work/large_sys_eq_opt
+cd "$WORKDIR"
 
-mkdir -p logs outputs profiles
+mkdir -p logs outputs profiles tmp
 
-NSYS="/usr/local/software/cuda/11.4/bin/nsys"
-JOB_TAG="${SLURM_JOB_NAME}_${SLURM_JOB_ID}"
+PROFDIR="$WORKDIR/profiles"
+TMPDIR_JOB="$WORKDIR/tmp/nsys_${SLURM_JOB_ID}"
+mkdir -p "$TMPDIR_JOB"
+export TMPDIR="$TMPDIR_JOB"
 
-PREFLIGHT_STDOUT="logs/${JOB_TAG}_preflight_stdout.txt"
-PREFLIGHT_STDERR="logs/${JOB_TAG}_preflight_stderr.txt"
+echo "===== JOB INFO ====="
+echo "JobID:    ${SLURM_JOB_ID}"
+echo "JobName:  ${SLURM_JOB_NAME}"
+echo "Host:     $(hostname)"
+echo "Nodelist: ${SLURM_JOB_NODELIST}"
+echo "Start:    $(date)"
+echo "Workdir:  $(pwd)"
+echo "GPUs:     ${CUDA_VISIBLE_DEVICES:-unset}"
+echo "TMPDIR:   ${TMPDIR}"
 
-NSYS_STDOUT="logs/${JOB_TAG}_nsys_stdout.txt"
-NSYS_STDERR="logs/${JOB_TAG}_nsys_stderr.txt"
+echo ""
+echo "===== MODULES ====="
+module purge
+module load rhel8/default-amp
+module list 2>&1 || true
 
-PROFILE_PREFIX="profiles/${JOB_TAG}"
+echo ""
+echo "===== TOOL CHECK ====="
+which nvcc || true
+nvcc --version || true
+which nsys || true
+nsys --version || true
+nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader || true
 
-echo "=========================================="
-echo "Job ID              : ${SLURM_JOB_ID}"
-echo "Job name            : ${SLURM_JOB_NAME}"
-echo "Node                : ${SLURMD_NODENAME}"
-echo "Start time          : $(date)"
-echo "Working directory   : $(pwd)"
-echo "CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-UNSET}"
-echo "=========================================="
+echo ""
+echo "===== BUILD ====="
+make clean
+make
 
-echo
-echo "[1/5] Checking GPU allocation..."
-nvidia-smi
+echo ""
+echo "===== CLEAN OLD NSYS OUTPUTS FOR THIS JOB ====="
+NSYS_OUT="${PROFDIR}/nsys_gpu_${SLURM_JOB_ID}"
+rm -f "${NSYS_OUT}"*
 
-echo
-echo "[2/5] Checking Nsight Systems..."
-if [ ! -x "$NSYS" ]; then
-    echo "ERROR: nsys not found at $NSYS"
-    exit 1
-fi
+echo ""
+echo "===== NSYS PROFILE: QDREP-FIRST MODE ====="
+echo "Goal: generate .qdrep or .nsys-rep"
+echo "Important: stats disabled to avoid extra post-processing failure."
 
-echo "Using nsys: $NSYS"
-"$NSYS" --version
-
-echo
-echo "[3/5] Cleaning old profile files for this job..."
-rm -f "${PROFILE_PREFIX}"*
-
-echo
-echo "[4/5] Running preflight without Nsight..."
-if ./main_gpu > "$PREFLIGHT_STDOUT" 2> "$PREFLIGHT_STDERR"; then
-    echo "Preflight run: SUCCESS"
-else
-    echo "Preflight run: FAILED"
-    echo "See:"
-    echo "  $PREFLIGHT_STDOUT"
-    echo "  $PREFLIGHT_STDERR"
-    exit 1
-fi
-
-echo
-echo "[5/5] Running with Nsight Systems..."
-if "$NSYS" profile \
-    --trace=cuda \
+nsys profile \
+    --stats=false \
     --sample=none \
-    --stats=true \
-    --force-overwrite=true \
-    -o "$PROFILE_PREFIX" \
-    ./main_gpu \
-    > "$NSYS_STDOUT" \
-    2> "$NSYS_STDERR"; then
-    echo "Nsight run: SUCCESS"
+    --trace=cuda,nvtx,osrt \
+    --force-overwrite true \
+    -o "${NSYS_OUT}" \
+    ./main_gpu
+
+echo ""
+echo "===== NSYS OUTPUT FILES ====="
+ls -lh "${PROFDIR}"/nsys_gpu_"${SLURM_JOB_ID}"* || true
+
+echo ""
+echo "===== NSYS REPORT CHECK ====="
+
+if [ -f "${NSYS_OUT}.qdrep" ]; then
+    echo "[OK] qdrep generated:"
+    ls -lh "${NSYS_OUT}.qdrep"
+
+elif [ -f "${NSYS_OUT}.nsys-rep" ]; then
+    echo "[OK] nsys-rep generated:"
+    ls -lh "${NSYS_OUT}.nsys-rep"
+
+elif [ -f "${NSYS_OUT}.qdstrm" ]; then
+    echo "[WARNING] Only qdstrm generated:"
+    ls -lh "${NSYS_OUT}.qdstrm"
+    echo ""
+    echo "Trying manual import with QdstrmImporter if available..."
+
+    NSYS_BIN="$(which nsys || true)"
+    NSYS_DIR="$(dirname "$NSYS_BIN")"
+
+    echo "nsys path: ${NSYS_BIN}"
+    echo "nsys dir : ${NSYS_DIR}"
+
+    echo ""
+    echo "Searching for QdstrmImporter..."
+    find "$(dirname "$NSYS_DIR")" -name "QdstrmImporter" -type f 2>/dev/null || true
+
+    IMPORTER="$(find "$(dirname "$NSYS_DIR")" -name "QdstrmImporter" -type f 2>/dev/null | head -n 1 || true)"
+
+    if [ -n "${IMPORTER}" ]; then
+        echo "Found importer: ${IMPORTER}"
+        echo "Running manual qdstrm import..."
+
+        "${IMPORTER}" \
+            -i "${NSYS_OUT}.qdstrm" \
+            -o "${NSYS_OUT}.qdrep" || true
+
+        echo ""
+        echo "Files after manual import:"
+        ls -lh "${PROFDIR}"/nsys_gpu_"${SLURM_JOB_ID}"* || true
+    else
+        echo "QdstrmImporter was not found in the Nsight Systems installation."
+    fi
+
 else
-    echo "Nsight run: FAILED"
-    echo "See:"
-    echo "  $NSYS_STDOUT"
-    echo "  $NSYS_STDERR"
-    exit 1
+    echo "[ERROR] No Nsight Systems output found."
 fi
 
-echo
-echo "=========================================="
-echo "Generated logs:"
-echo "  Preflight stdout : $PREFLIGHT_STDOUT"
-echo "  Preflight stderr : $PREFLIGHT_STDERR"
-echo "  Nsight stdout    : $NSYS_STDOUT"
-echo "  Nsight stderr    : $NSYS_STDERR"
+echo ""
+echo "===== FINAL PROFILE FILE SEARCH ====="
+find "$PROFDIR" \
+    \( -name "*.qdrep" -o -name "*.nsys-rep" -o -name "*.qdstrm" \) \
+    -type f \
+    -ls || true
 
-echo
-echo "Generated profile files:"
-ls -lh "${PROFILE_PREFIX}"* || true
-
-
-echo
-echo "End time: $(date)"
-echo "=========================================="
+echo ""
+echo "===== END ====="
+date

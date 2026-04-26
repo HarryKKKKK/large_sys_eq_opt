@@ -310,11 +310,10 @@ void advance_second_order_gpu(const Grid2DGPU& Uold,
 
     sweep_x_second_order_kernel<<<blocks, threads>>>(make_view(Uold), make_view(Utmp), dt);
     cudaGetLastError();
-    cudaDeviceSynchronize();
-    apply_transmissive_boundary_gpu(Utmp);
-
+    apply_transmissive_boundary_y_gpu(Utmp);
     sweep_y_second_order_kernel<<<blocks, threads>>>(make_view(Utmp), make_view(Unew), dt);
     cudaGetLastError();
-    cudaDeviceSynchronize();
+    // TODO: could be replace by boundry_x ?
+    // apply_transmissive_boundary_x_gpu(Unew);
     apply_transmissive_boundary_gpu(Unew);
 }
