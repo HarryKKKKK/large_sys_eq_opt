@@ -11,10 +11,10 @@
 #endif
 
 struct Conserved {
-    double rho  = 0.0;
-    double rhou = 0.0;
-    double rhov = 0.0;
-    double E    = 0.0;
+    double rho;
+    double rhou;
+    double rhov;
+    double E;
 
     HD Conserved() {}
 
@@ -23,10 +23,10 @@ struct Conserved {
 };
 
 struct Primitive {
-    double rho = 0.0;
-    double u   = 0.0;
-    double v   = 0.0;
-    double p   = 0.0;
+    double rho;
+    double u;
+    double v;
+    double p;
 
     HD Primitive() {}
 
@@ -35,10 +35,10 @@ struct Primitive {
 };
 
 struct Flux {
-    double mass   = 0.0;
-    double momx   = 0.0;
-    double momy   = 0.0;
-    double energy = 0.0;
+    double mass;
+    double momx;
+    double momy;
+    double energy;
 
     HD Flux() {}
 

@@ -75,15 +75,11 @@ void apply_transmissive_boundary_gpu(Grid2DGPU& grid) {
         const int threads = 256;
         const int blocks = (grid.ny() + threads - 1) / threads;
         apply_transmissive_boundary_x_kernel<<<blocks, threads>>>(view);
-        cudaGetLastError();
     }
 
     {
         const int threads = 256;
         const int blocks = (grid.total_nx() + threads - 1) / threads;
         apply_transmissive_boundary_y_kernel<<<blocks, threads>>>(view);
-        cudaGetLastError();
     }
-
-    cudaDeviceSynchronize();
 }
