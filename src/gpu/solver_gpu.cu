@@ -48,7 +48,33 @@ __device__ inline Conserved enforce_physical_conserved_gpu(const Conserved& cand
     return is_physical_gpu(Vcand) ? candidate : fallback;
 }
 
+__device__ inline int clamp_int_gpu(int x, int lo, int hi) {
+    return (x < lo) ? lo : ((x > hi) ? hi : x);
+}
+
 __device__ inline Conserved load_state(const Grid2DGPUView& U, int i, int j) {
+    const int idx = U.flat_index(i, j);
+    return Conserved(U.rho[idx], U.rhou[idx], U.rhov[idx], U.E[idx]);
+}
+
+__device__ inline Conserved load_state_x_clamped(const Grid2DGPUView& U, int i, int j) {
+    i = clamp_int_gpu(i, U.i_begin(), U.i_end() - 1);
+
+    const int idx = U.flat_index(i, j);
+    return Conserved(U.rho[idx], U.rhou[idx], U.rhov[idx], U.E[idx]);
+}
+
+__device__ inline Conserved load_state_y_clamped(const Grid2DGPUView& U, int i, int j) {
+    j = clamp_int_gpu(j, U.j_begin(), U.j_end() - 1);
+
+    const int idx = U.flat_index(i, j);
+    return Conserved(U.rho[idx], U.rhou[idx], U.rhov[idx], U.E[idx]);
+}
+
+__device__ inline Conserved load_state_xy_clamped(const Grid2DGPUView& U, int i, int j) {
+    i = clamp_int_gpu(i, U.i_begin(), U.i_end() - 1);
+    j = clamp_int_gpu(j, U.j_begin(), U.j_end() - 1);
+
     const int idx = U.flat_index(i, j);
     return Conserved(U.rho[idx], U.rhou[idx], U.rhov[idx], U.E[idx]);
 }
@@ -102,18 +128,18 @@ __device__ inline Conserved muscl_hancock_flux_x_gpu(const Grid2DGPUView& U, int
     Conserved Uip1_L_star, Uip1_R_star;
 
     reconstruct_cell_muscl_hancock_gpu(
-        load_state(U, i - 1, j),
-        load_state(U, i,     j),
-        load_state(U, i + 1, j),
+        load_state_x_clamped(U, i - 1, j),
+        load_state_x_clamped(U, i,     j),
+        load_state_x_clamped(U, i + 1, j),
         dt_over_dx,
         Direction::X,
         Ui_L_star, Ui_R_star
     );
 
     reconstruct_cell_muscl_hancock_gpu(
-        load_state(U, i,     j),
-        load_state(U, i + 1, j),
-        load_state(U, i + 2, j),
+        load_state_x_clamped(U, i,     j),
+        load_state_x_clamped(U, i + 1, j),
+        load_state_x_clamped(U, i + 2, j),
         dt_over_dx,
         Direction::X,
         Uip1_L_star, Uip1_R_star
@@ -129,18 +155,18 @@ __device__ inline Conserved muscl_hancock_flux_y_gpu(const Grid2DGPUView& U, int
     Conserved Ujp1_L_star, Ujp1_R_star;
 
     reconstruct_cell_muscl_hancock_gpu(
-        load_state(U, i, j - 1),
-        load_state(U, i, j),
-        load_state(U, i, j + 1),
+        load_state_y_clamped(U, i, j - 1),
+        load_state_y_clamped(U, i, j),
+        load_state_y_clamped(U, i, j + 1),
         dt_over_dy,
         Direction::Y,
         Uj_L_star, Uj_R_star
     );
 
     reconstruct_cell_muscl_hancock_gpu(
-        load_state(U, i, j),
-        load_state(U, i, j + 1),
-        load_state(U, i, j + 2),
+        load_state_y_clamped(U, i, j),
+        load_state_y_clamped(U, i, j + 1),
+        load_state_y_clamped(U, i, j + 2),
         dt_over_dy,
         Direction::Y,
         Ujp1_L_star, Ujp1_R_star
@@ -176,11 +202,11 @@ __global__ void advance_first_order_kernel(Grid2DGPUView Uold,
         return;
     }
 
-    const Conserved Uc  = load_state(Uold, i,     j);
-    const Conserved Uim = load_state(Uold, i - 1, j);
-    const Conserved Uip = load_state(Uold, i + 1, j);
-    const Conserved Ujm = load_state(Uold, i, j - 1);
-    const Conserved Ujp = load_state(Uold, i, j + 1);
+    const Conserved Uc  = load_state_xy_clamped(Uold, i,     j);
+    const Conserved Uim = load_state_xy_clamped(Uold, i - 1, j);
+    const Conserved Uip = load_state_xy_clamped(Uold, i + 1, j);
+    const Conserved Ujm = load_state_xy_clamped(Uold, i, j - 1);
+    const Conserved Ujp = load_state_xy_clamped(Uold, i, j + 1);
 
     const Conserved FxL = hll_flux(Uim, Uc,  Direction::X);
     const Conserved FxR = hll_flux(Uc,  Uip, Direction::X);
@@ -224,7 +250,9 @@ __global__ void sweep_x_second_order_kernel(Grid2DGPUView Uin,
     Uout.E[c]    = Unew_cell.E;
 }
 
-__global__ void sweep_y_second_order_kernel(Grid2DGPUView Uin, Grid2DGPUView Uout, double dt) {
+__global__ void sweep_y_second_order_kernel(Grid2DGPUView Uin,
+                                            Grid2DGPUView Uout,
+                                            double dt) {
     const int i = blockIdx.x * blockDim.x + threadIdx.x + Uin.i_begin();
     const int j = blockIdx.y * blockDim.y + threadIdx.y + Uin.j_begin();
 
@@ -246,7 +274,7 @@ __global__ void sweep_y_second_order_kernel(Grid2DGPUView Uin, Grid2DGPUView Uou
     Uout.E[c]    = Unew_cell.E;
 }
 
-}
+} // namespace
 
 double compute_dt_gpu(const Grid2DGPU& grid, double cfl) {
     const std::size_t n = grid.num_cells();
@@ -294,8 +322,6 @@ void advance_first_order_gpu(const Grid2DGPU& Uold, Grid2DGPU& Unew, double dt) 
 
     advance_first_order_kernel<<<blocks, threads>>>(make_view(Uold), make_view(Unew), dt);
     cudaGetLastError();
-    cudaDeviceSynchronize();
-    apply_transmissive_boundary_gpu(Unew);
 }
 
 void advance_second_order_gpu(const Grid2DGPU& Uold,
@@ -310,10 +336,7 @@ void advance_second_order_gpu(const Grid2DGPU& Uold,
 
     sweep_x_second_order_kernel<<<blocks, threads>>>(make_view(Uold), make_view(Utmp), dt);
     cudaGetLastError();
-    apply_transmissive_boundary_y_gpu(Utmp);
+
     sweep_y_second_order_kernel<<<blocks, threads>>>(make_view(Utmp), make_view(Unew), dt);
     cudaGetLastError();
-    // TODO: could be replace by boundry_x ?
-    // apply_transmissive_boundary_x_gpu(Unew);
-    apply_transmissive_boundary_gpu(Unew);
 }

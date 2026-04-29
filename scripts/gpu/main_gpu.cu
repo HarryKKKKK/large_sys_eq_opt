@@ -3,7 +3,6 @@
 #include "test_cases.hpp"
 #include "types.hpp"
 
-#include "gpu/boundary_gpu.cuh"
 #include "gpu/grid_gpu.cuh"
 #include "gpu/solver_gpu.cuh"
 
@@ -274,19 +273,6 @@ int main() {
 
     const double dx = (cfg.x_max - cfg.x_min) / static_cast<double>(cfg.nx);
     const double dy = (cfg.y_max - cfg.y_min) / static_cast<double>(cfg.ny);
-
-    // Initial boundary update only.
-    // The per-step boundary update is handled inside advance_second_order_gpu().
-    {
-        CUDA_CHECK(cudaDeviceSynchronize());
-        const auto t0 = Clock::now();
-
-        apply_transmissive_boundary_gpu(d_U);
-
-        CUDA_CHECK(cudaDeviceSynchronize());
-        const auto t1 = Clock::now();
-        timings.boundary_time += Seconds(t1 - t0).count();
-    }
 
     CUDA_CHECK(cudaDeviceSynchronize());
     const auto loop_start = Clock::now();
