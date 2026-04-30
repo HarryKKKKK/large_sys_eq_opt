@@ -15,6 +15,7 @@ bin/
 obj/
 
 logs/
+tmp/
 
 __pycache__/
 *.pyc

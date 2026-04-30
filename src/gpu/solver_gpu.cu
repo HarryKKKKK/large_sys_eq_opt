@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <iostream>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -106,7 +108,12 @@ __device__ inline void reconstruct_cell_muscl_hancock_gpu(
     U_right_star = enforce_physical_conserved_gpu(U_right - half_update, U_right);
 }
 
-__device__ inline Conserved muscl_hancock_flux_x_gpu(const ConstGrid2DGPUView& U, int i, int j, double dt) {
+__device__ inline Conserved muscl_hancock_flux_x_gpu(
+    const ConstGrid2DGPUView& U,
+    int i,
+    int j,
+    double dt
+) {
     const double dt_over_dx = dt / U.dx;
 
     Conserved Ui_L_star, Ui_R_star;
@@ -133,7 +140,12 @@ __device__ inline Conserved muscl_hancock_flux_x_gpu(const ConstGrid2DGPUView& U
     return hll_flux(Ui_R_star, Uip1_L_star, Direction::X);
 }
 
-__device__ inline Conserved muscl_hancock_flux_y_gpu(const ConstGrid2DGPUView& U, int i, int j, double dt) {
+__device__ inline Conserved muscl_hancock_flux_y_gpu(
+    const ConstGrid2DGPUView& U,
+    int i,
+    int j,
+    double dt
+) {
     const double dt_over_dy = dt / U.dy;
 
     Conserved Uj_L_star, Uj_R_star;
@@ -168,6 +180,100 @@ __device__ inline int yface_idx(int local_j_face, int local_i, int nx_cells) {
     return local_j_face * nx_cells + local_i;
 }
 
+// -----------------------------------------------------------------------------
+// Shared-memory helpers for face-flux kernels.
+// -----------------------------------------------------------------------------
+
+__device__ inline Conserved load_state_smem(
+    const double* __restrict__ s_rho,
+    const double* __restrict__ s_rhou,
+    const double* __restrict__ s_rhov,
+    const double* __restrict__ s_E,
+    int sj,
+    int si,
+    int tile_w
+) {
+    const int sidx = sj * tile_w + si;
+    return Conserved(
+        s_rho[sidx],
+        s_rhou[sidx],
+        s_rhov[sidx],
+        s_E[sidx]
+    );
+}
+
+__device__ inline Conserved muscl_hancock_flux_x_smem(
+    const double* __restrict__ s_rho,
+    const double* __restrict__ s_rhou,
+    const double* __restrict__ s_rhov,
+    const double* __restrict__ s_E,
+    int sj,
+    int si_face,
+    int tile_w,
+    double dt_over_dx
+) {
+    Conserved Ui_L_star, Ui_R_star;
+    Conserved Uip1_L_star, Uip1_R_star;
+
+    reconstruct_cell_muscl_hancock_gpu(
+        load_state_smem(s_rho, s_rhou, s_rhov, s_E, sj, si_face - 1, tile_w),
+        load_state_smem(s_rho, s_rhou, s_rhov, s_E, sj, si_face,     tile_w),
+        load_state_smem(s_rho, s_rhou, s_rhov, s_E, sj, si_face + 1, tile_w),
+        dt_over_dx,
+        Direction::X,
+        Ui_L_star, Ui_R_star
+    );
+
+    reconstruct_cell_muscl_hancock_gpu(
+        load_state_smem(s_rho, s_rhou, s_rhov, s_E, sj, si_face,     tile_w),
+        load_state_smem(s_rho, s_rhou, s_rhov, s_E, sj, si_face + 1, tile_w),
+        load_state_smem(s_rho, s_rhou, s_rhov, s_E, sj, si_face + 2, tile_w),
+        dt_over_dx,
+        Direction::X,
+        Uip1_L_star, Uip1_R_star
+    );
+
+    return hll_flux(Ui_R_star, Uip1_L_star, Direction::X);
+}
+
+__device__ inline Conserved muscl_hancock_flux_y_smem(
+    const double* __restrict__ s_rho,
+    const double* __restrict__ s_rhou,
+    const double* __restrict__ s_rhov,
+    const double* __restrict__ s_E,
+    int sj_face,
+    int si,
+    int tile_w,
+    double dt_over_dy
+) {
+    Conserved Uj_L_star, Uj_R_star;
+    Conserved Ujp1_L_star, Ujp1_R_star;
+
+    reconstruct_cell_muscl_hancock_gpu(
+        load_state_smem(s_rho, s_rhou, s_rhov, s_E, sj_face - 1, si, tile_w),
+        load_state_smem(s_rho, s_rhou, s_rhov, s_E, sj_face,     si, tile_w),
+        load_state_smem(s_rho, s_rhou, s_rhov, s_E, sj_face + 1, si, tile_w),
+        dt_over_dy,
+        Direction::Y,
+        Uj_L_star, Uj_R_star
+    );
+
+    reconstruct_cell_muscl_hancock_gpu(
+        load_state_smem(s_rho, s_rhou, s_rhov, s_E, sj_face,     si, tile_w),
+        load_state_smem(s_rho, s_rhou, s_rhov, s_E, sj_face + 1, si, tile_w),
+        load_state_smem(s_rho, s_rhou, s_rhov, s_E, sj_face + 2, si, tile_w),
+        dt_over_dy,
+        Direction::Y,
+        Ujp1_L_star, Ujp1_R_star
+    );
+
+    return hll_flux(Uj_R_star, Ujp1_L_star, Direction::Y);
+}
+
+// -----------------------------------------------------------------------------
+// Kernels
+// -----------------------------------------------------------------------------
+
 __global__ void compute_local_speed_kernel(ConstGrid2DGPUView grid, double* speed) {
     const int i = blockIdx.x * blockDim.x + threadIdx.x + grid.i_begin();
     const int j = blockIdx.y * blockDim.y + threadIdx.y + grid.j_begin();
@@ -185,9 +291,11 @@ __global__ void compute_local_speed_kernel(ConstGrid2DGPUView grid, double* spee
     speed[idx] = fmax(sx, sy);
 }
 
-__global__ void advance_first_order_kernel(ConstGrid2DGPUView Uold,
-                                           Grid2DGPUView Unew,
-                                           double dt) {
+__global__ void advance_first_order_kernel(
+    ConstGrid2DGPUView Uold,
+    Grid2DGPUView Unew,
+    double dt
+) {
     const int i = blockIdx.x * blockDim.x + threadIdx.x + Uold.i_begin();
     const int j = blockIdx.y * blockDim.y + threadIdx.y + Uold.j_begin();
 
@@ -219,6 +327,7 @@ __global__ void advance_first_order_kernel(ConstGrid2DGPUView Uold,
     Unew.E[c]    = Unew_cell.E;
 }
 
+// Original non-shared x-face flux kernel kept for easy A/B testing.
 __global__ void compute_x_face_fluxes_kernel(
     ConstGrid2DGPUView Uin,
     double dt,
@@ -247,14 +356,101 @@ __global__ void compute_x_face_fluxes_kernel(
     fx_energy[idx] = F.E;
 }
 
+// TODO: 
+__global__ void compute_x_face_fluxes_shared_kernel(
+    ConstGrid2DGPUView Uin,
+    double dt,
+    double* __restrict__ fx_mass,
+    double* __restrict__ fx_momx,
+    double* __restrict__ fx_momy,
+    double* __restrict__ fx_energy
+) {
+    // indexing and mem creation
+    const int nx_faces = Uin.nx + 1;
+
+    const int local_i_face = blockIdx.x * blockDim.x + threadIdx.x;
+    const int local_j      = blockIdx.y * blockDim.y + threadIdx.y;
+
+    const int tile_w = blockDim.x + 3;
+    const int tile_h = blockDim.y;
+    const int tile_n = tile_w * tile_h;
+
+    extern __shared__ double smem[];
+
+    double* s_rho  = smem;
+    double* s_rhou = s_rho  + tile_n;
+    double* s_rhov = s_rhou + tile_n;
+    double* s_E    = s_rhov + tile_n;
+
+    // indexing and move data
+    const int tid = threadIdx.y * blockDim.x + threadIdx.x;
+    const int block_threads = blockDim.x * blockDim.y;
+
+    const int block_face_start = blockIdx.x * blockDim.x;
+
+    const int i_face_start = (Uin.i_begin() - 1) + block_face_start;
+    const int i_tile_start = i_face_start - 1;
+
+    const int valid_i_min = Uin.i_begin() - 2;
+    const int valid_i_max = Uin.i_end() + 1;
+
+    for (int linear = tid; linear < tile_n; linear += block_threads) {
+        const int sj = linear / tile_w;
+        const int si = linear - sj * tile_w;
+
+        const int lj = blockIdx.y * blockDim.y + sj;
+        const int gi = i_tile_start + si;
+
+        if (lj < Uin.ny && gi >= valid_i_min && gi <= valid_i_max) {
+            const int gj = Uin.j_begin() + lj;
+
+            const int gidx = Uin.flat_index(gi, gj);
+            const int sidx = sj * tile_w + si;
+
+            s_rho[sidx]  = Uin.rho[gidx];
+            s_rhou[sidx] = Uin.rhou[gidx];
+            s_rhov[sidx] = Uin.rhov[gidx];
+            s_E[sidx]    = Uin.E[gidx];
+        }
+    }
+
+    __syncthreads();
+
+    if (local_i_face >= nx_faces || local_j >= Uin.ny) {
+        return;
+    }
+
+    // Calculation
+    const int sj = threadIdx.y;
+    const int si_face = threadIdx.x + 1;
+
+    const double dt_over_dx = dt / Uin.dx;
+
+    const Conserved F = muscl_hancock_flux_x_smem(
+        s_rho, s_rhou, s_rhov, s_E,
+        sj,
+        si_face,
+        tile_w,
+        dt_over_dx
+    );
+
+    // writing
+    const int idx = xface_idx(local_j, local_i_face, nx_faces);
+
+    fx_mass[idx]   = F.rho;
+    fx_momx[idx]   = F.rhou;
+    fx_momy[idx]   = F.rhov;
+    fx_energy[idx] = F.E;
+}
+
 __global__ void update_from_x_face_fluxes_kernel(
     ConstGrid2DGPUView Uin,
     Grid2DGPUView Uout,
     double dt,
-    const double* fx_mass,
-    const double* fx_momx,
-    const double* fx_momy,
-    const double* fx_energy
+    const double* __restrict__ fx_mass,
+    const double* __restrict__ fx_momx,
+    const double* __restrict__ fx_momy,
+    const double* __restrict__ fx_energy
 ) {
     const int local_i = blockIdx.x * blockDim.x + threadIdx.x;
     const int local_j = blockIdx.y * blockDim.y + threadIdx.y;
@@ -284,6 +480,7 @@ __global__ void update_from_x_face_fluxes_kernel(
     Uout.E[c]    = Unew_cell.E;
 }
 
+// Original non-shared y-face flux kernel kept for easy A/B testing.
 __global__ void compute_y_face_fluxes_kernel(
     ConstGrid2DGPUView Uin,
     double dt,
@@ -312,14 +509,104 @@ __global__ void compute_y_face_fluxes_kernel(
     fy_energy[idx] = F.E;
 }
 
+// TODO: 
+__global__ void compute_y_face_fluxes_shared_kernel(
+    ConstGrid2DGPUView Uin,
+    double dt,
+    double* __restrict__ fy_mass,
+    double* __restrict__ fy_momx,
+    double* __restrict__ fy_momy,
+    double* __restrict__ fy_energy
+) {
+    const int ny_faces = Uin.ny + 1;
+
+    const int local_i      = blockIdx.x * blockDim.x + threadIdx.x;
+    const int local_j_face = blockIdx.y * blockDim.y + threadIdx.y;
+
+    /*
+      For y-face flux at face j, MUSCL-Hancock needs:
+          U[j-1], U[j], U[j+1], U[j+2]
+
+      Therefore each block of blockDim.y face threads needs:
+          blockDim.y + 3 states along y.
+    */
+    const int tile_w = blockDim.x;
+    const int tile_h = blockDim.y + 3;
+    const int tile_n = tile_w * tile_h;
+
+    extern __shared__ double smem[];
+
+    double* s_rho  = smem;
+    double* s_rhou = s_rho  + tile_n;
+    double* s_rhov = s_rhou + tile_n;
+    double* s_E    = s_rhov + tile_n;
+
+    const int tid = threadIdx.y * blockDim.x + threadIdx.x;
+    const int block_threads = blockDim.x * blockDim.y;
+
+    const int block_face_start = blockIdx.y * blockDim.y;
+
+    const int j_face_start = (Uin.j_begin() - 1) + block_face_start;
+    const int j_tile_start = j_face_start - 1;
+
+    const int valid_j_min = Uin.j_begin() - 2;
+    const int valid_j_max = Uin.j_end() + 1;
+
+    for (int linear = tid; linear < tile_n; linear += block_threads) {
+        const int sj = linear / tile_w;
+        const int si = linear - sj * tile_w;
+
+        const int li = blockIdx.x * blockDim.x + si;
+        const int gj = j_tile_start + sj;
+
+        if (li < Uin.nx && gj >= valid_j_min && gj <= valid_j_max) {
+            const int gi = Uin.i_begin() + li;
+
+            const int gidx = Uin.flat_index(gi, gj);
+            const int sidx = sj * tile_w + si;
+
+            s_rho[sidx]  = Uin.rho[gidx];
+            s_rhou[sidx] = Uin.rhou[gidx];
+            s_rhov[sidx] = Uin.rhov[gidx];
+            s_E[sidx]    = Uin.E[gidx];
+        }
+    }
+
+    __syncthreads();
+
+    if (local_i >= Uin.nx || local_j_face >= ny_faces) {
+        return;
+    }
+
+    const int si = threadIdx.x;
+    const int sj_face = threadIdx.y + 1;
+
+    const double dt_over_dy = dt / Uin.dy;
+
+    const Conserved F = muscl_hancock_flux_y_smem(
+        s_rho, s_rhou, s_rhov, s_E,
+        sj_face,
+        si,
+        tile_w,
+        dt_over_dy
+    );
+
+    const int idx = yface_idx(local_j_face, local_i, Uin.nx);
+
+    fy_mass[idx]   = F.rho;
+    fy_momx[idx]   = F.rhou;
+    fy_momy[idx]   = F.rhov;
+    fy_energy[idx] = F.E;
+}
+
 __global__ void update_from_y_face_fluxes_kernel(
     ConstGrid2DGPUView Uin,
     Grid2DGPUView Uout,
     double dt,
-    const double* fy_mass,
-    const double* fy_momx,
-    const double* fy_momy,
-    const double* fy_energy
+    const double* __restrict__ fy_mass,
+    const double* __restrict__ fy_momx,
+    const double* __restrict__ fy_momy,
+    const double* __restrict__ fy_energy
 ) {
     const int local_i = blockIdx.x * blockDim.x + threadIdx.x;
     const int local_j = blockIdx.y * blockDim.y + threadIdx.y;
@@ -348,7 +635,7 @@ __global__ void update_from_y_face_fluxes_kernel(
     Uout.E[c]    = Unew_cell.E;
 }
 
-} // namespace
+} 
 
 void init_gpu_workspace(GpuWorkspace& ws, const Grid2DGPU& grid) {
     free_gpu_workspace(ws);
@@ -449,7 +736,8 @@ void advance_second_order_gpu(const Grid2DGPU& Uold,
                               Grid2DGPU& Unew,
                               GpuWorkspace& ws,
                               double dt) {
-    if (ws.nx != Uold.nx() || ws.ny != Uold.ny() || ws.fx_mass == nullptr || ws.fy_mass == nullptr) {
+    if (ws.nx != Uold.nx() || ws.ny != Uold.ny() ||
+        ws.fx_mass == nullptr || ws.fy_mass == nullptr) {
         throw std::runtime_error("advance_second_order_gpu: workspace not initialized for this grid.");
     }
 
@@ -470,27 +758,45 @@ void advance_second_order_gpu(const Grid2DGPU& Uold,
         ((Uold.ny() + 1) + threads.y - 1) / threads.y
     );
 
-    compute_x_face_fluxes_kernel<<<xface_blocks, threads>>>(
+    const int x_tile_w = threads.x + 3;
+    const int x_tile_h = threads.y;
+    const std::size_t x_smem_bytes =
+        4 * static_cast<std::size_t>(x_tile_w) *
+        static_cast<std::size_t>(x_tile_h) *
+        sizeof(double);
+
+    compute_x_face_fluxes_shared_kernel<<<xface_blocks, threads, x_smem_bytes>>>(
         make_view(static_cast<const Grid2DGPU&>(Uold)), dt,
         ws.fx_mass, ws.fx_momx, ws.fx_momy, ws.fx_energy
     );
+    CUDA_CHECK(cudaGetLastError());
 
     update_from_x_face_fluxes_kernel<<<cell_blocks, threads>>>(
         make_view(static_cast<const Grid2DGPU&>(Uold)), make_view(Utmp), dt,
         ws.fx_mass, ws.fx_momx, ws.fx_momy, ws.fx_energy
     );
+    CUDA_CHECK(cudaGetLastError());
 
     apply_transmissive_boundary_gpu(Utmp);
 
-    compute_y_face_fluxes_kernel<<<yface_blocks, threads>>>(
+    const int y_tile_w = threads.x;
+    const int y_tile_h = threads.y + 3;
+    const std::size_t y_smem_bytes =
+        4 * static_cast<std::size_t>(y_tile_w) *
+        static_cast<std::size_t>(y_tile_h) *
+        sizeof(double);
+
+    compute_y_face_fluxes_shared_kernel<<<yface_blocks, threads, y_smem_bytes>>>(
         make_view(static_cast<const Grid2DGPU&>(Utmp)), dt,
         ws.fy_mass, ws.fy_momx, ws.fy_momy, ws.fy_energy
     );
+    CUDA_CHECK(cudaGetLastError());
 
     update_from_y_face_fluxes_kernel<<<cell_blocks, threads>>>(
         make_view(static_cast<const Grid2DGPU&>(Utmp)), make_view(Unew), dt,
         ws.fy_mass, ws.fy_momx, ws.fy_momy, ws.fy_energy
     );
+    CUDA_CHECK(cudaGetLastError());
 
     apply_transmissive_boundary_gpu(Unew);
 }
