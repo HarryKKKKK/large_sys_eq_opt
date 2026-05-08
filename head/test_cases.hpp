@@ -26,5 +26,8 @@ CaseId parse_case_id(const std::string& case_name);
 CaseConfig get_case_config(CaseId case_id);
 CaseConfig get_case_config(const std::string& case_name);
 
+CaseConfig get_n_case_config(CaseId case_id, int n);
+CaseConfig get_n_case_config(const std::string& case_name, int n);
+
 Conserved initial_state_at(CaseId case_id, double x, double y);
 Conserved initial_state_at(const std::string& case_name, double x, double y);
