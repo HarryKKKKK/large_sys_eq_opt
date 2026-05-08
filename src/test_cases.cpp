@@ -106,3 +106,20 @@ Conserved initial_state_at(CaseId case_id, double x, double y) {
 Conserved initial_state_at(const std::string& case_name, double x, double y) {
     return initial_state_at(parse_case_id(case_name), x, y);
 }
+
+CaseConfig get_n_case_config(CaseId case_id, int n) {
+    if (n < 1) {
+        throw std::runtime_error("get_n_case_config: n must be >= 1.");
+    }
+
+    CaseConfig cfg = get_case_config(case_id);
+
+    cfg.nx *= n;
+    cfg.ny *= n;
+
+    return cfg;
+}
+
+CaseConfig get_n_case_config(const std::string& case_name, int n) {
+    return get_n_case_config(parse_case_id(case_name), n);
+}
