@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -42,6 +43,12 @@ struct TimingStats {
     double total_program_time = 0.0;
 };
 
+struct RunOptions {
+    int resolution_scale = 1;
+    bool write_output = false;
+    int num_snapshots = 5;
+};
+
 inline void cuda_check(cudaError_t err, const char* call, const char* file, int line) {
     if (err != cudaSuccess) {
         std::cerr << "CUDA error at " << file << ":" << line
@@ -52,6 +59,28 @@ inline void cuda_check(cudaError_t err, const char* call, const char* file, int 
 }
 
 #define CUDA_CHECK(call) cuda_check((call), #call, __FILE__, __LINE__)
+
+RunOptions parse_run_options(int argc, char** argv) {
+    RunOptions opts;
+
+    if (argc >= 2) {
+        opts.resolution_scale = std::stoi(argv[1]);
+    }
+
+    for (int i = 2; i < argc; ++i) {
+        const std::string arg = argv[i];
+
+        if (arg == "--output") {
+            opts.write_output = true;
+            opts.num_snapshots = 5;
+        } else if (arg == "--timing-only") {
+            opts.write_output = true;
+            opts.num_snapshots = 0;
+        }
+    }
+
+    return opts;
+}
 
 void ensure_output_dir() {
     std::filesystem::create_directories("outputs");
@@ -100,6 +129,7 @@ void write_aos_csv(const std::vector<Conserved>& data,
 void write_timing_report(const std::string& filename,
                          const std::string& case_name,
                          const CaseConfig& cfg,
+                         int resolution_scale,
                          int step,
                          double final_time,
                          int num_snapshots_written,
@@ -109,8 +139,11 @@ void write_timing_report(const std::string& filename,
 
     out << "=== GPU Timing Report ===\n";
     out << "case_name                 : " << case_name << "\n";
+    out << "resolution_scale          : " << resolution_scale << "\n";
     out << "nx                        : " << cfg.nx << "\n";
     out << "ny                        : " << cfg.ny << "\n";
+    out << "total_cells               : "
+        << static_cast<long long>(cfg.nx) * static_cast<long long>(cfg.ny) << "\n";
     out << "ng                        : " << cfg.ng << "\n";
     out << "x_min                     : " << cfg.x_min << "\n";
     out << "x_max                     : " << cfg.x_max << "\n";
@@ -184,16 +217,19 @@ void print_timing_report(const TimingStats& ts, int step) {
         std::cout << "avg_compute_dt_per_step   : " << (ts.compute_dt_time / step) << " s\n";
         std::cout << "avg_advance_per_step      : " << (ts.advance_time / step) << " s\n";
     }
+
     std::cout << "==========================\n";
 }
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
     const auto program_start = Clock::now();
     TimingStats timings;
 
-    {
+    const RunOptions opts = parse_run_options(argc, argv);
+
+    if (opts.write_output) {
         const auto t0 = Clock::now();
         ensure_output_dir();
         const auto t1 = Clock::now();
@@ -201,6 +237,7 @@ int main() {
     }
 
     const std::string case_name = "shock_bubble";
+
     CaseConfig cfg;
     Grid2D host_init;
 
@@ -208,11 +245,26 @@ int main() {
         const auto t0 = Clock::now();
 
         cfg = get_case_config(case_name);
-        host_init = make_initial_grid(case_name);
+        cfg.nx *= opts.resolution_scale;
+        cfg.ny *= opts.resolution_scale;
+
+        host_init = make_n_grid(case_name, opts.resolution_scale);
 
         const auto t1 = Clock::now();
         timings.config_and_host_init_time = Seconds(t1 - t0).count();
     }
+
+    std::cout << "[GPU] case_name          : " << case_name << "\n";
+    std::cout << "[GPU] resolution_scale   : " << opts.resolution_scale << "\n";
+    std::cout << "[GPU] nx                 : " << cfg.nx << "\n";
+    std::cout << "[GPU] ny                 : " << cfg.ny << "\n";
+    std::cout << "[GPU] total_cells        : "
+              << static_cast<long long>(cfg.nx) * static_cast<long long>(cfg.ny)
+              << "\n";
+    std::cout << "[GPU] write_output       : "
+              << (opts.write_output ? "true" : "false") << "\n";
+    std::cout << "[GPU] num_snapshots      : "
+              << (opts.write_output ? opts.num_snapshots : 0) << "\n";
 
     Grid2DGPU d_U;
     Grid2DGPU d_U_mid;
@@ -270,16 +322,18 @@ int main() {
     double t = 0.0;
     int step = 0;
 
-    const int num_snapshots = 5;
+    const int num_snapshots = opts.write_output ? opts.num_snapshots : 0;
     std::vector<double> snapshot_times;
     int next_snapshot = 0;
 
-    {
+    if (opts.write_output && num_snapshots > 0) {
         const auto t0 = Clock::now();
 
         snapshot_times.reserve(num_snapshots);
         for (int k = 1; k <= num_snapshots; ++k) {
-            snapshot_times.push_back(cfg.t_end * static_cast<double>(k) / num_snapshots);
+            snapshot_times.push_back(
+                cfg.t_end * static_cast<double>(k) / static_cast<double>(num_snapshots)
+            );
         }
 
         const auto t1 = Clock::now();
@@ -304,6 +358,7 @@ int main() {
         }
 
         double dt = 0.0;
+
         {
             const auto t0 = Clock::now();
 
@@ -331,7 +386,9 @@ int main() {
         t += dt;
         ++step;
 
-        while (next_snapshot < num_snapshots && t >= snapshot_times[next_snapshot]) {
+        while (opts.write_output &&
+               next_snapshot < num_snapshots &&
+               t >= snapshot_times[next_snapshot]) {
             std::vector<Conserved> host_snapshot;
 
             {
@@ -344,7 +401,11 @@ int main() {
                 timings.snapshot_download_time += Seconds(t1 - t0).count();
             }
 
-            const std::string filename = make_snapshot_name("gpu", next_snapshot + 1);
+            std::ostringstream snapshot_prefix;
+            snapshot_prefix << "gpu_n" << opts.resolution_scale;
+
+            const std::string filename =
+                make_snapshot_name(snapshot_prefix.str(), next_snapshot + 1);
 
             {
                 const auto t0 = Clock::now();
@@ -388,18 +449,27 @@ int main() {
 
     print_timing_report(timings, step);
 
-    const std::string timing_file = make_timing_name("gpu");
-    write_timing_report(
-        timing_file,
-        case_name,
-        cfg,
-        step,
-        t,
-        next_snapshot,
-        timings
-    );
+    if (opts.write_output) {
+        std::ostringstream timing_prefix;
+        timing_prefix << "gpu_n" << opts.resolution_scale;
 
-    std::cout << "[GPU] Timing report written to " << timing_file << "\n";
+        const std::string timing_file = make_timing_name(timing_prefix.str());
+
+        write_timing_report(
+            timing_file,
+            case_name,
+            cfg,
+            opts.resolution_scale,
+            step,
+            t,
+            next_snapshot,
+            timings
+        );
+
+        std::cout << "[GPU] Timing report written to " << timing_file << "\n";
+    } else {
+        std::cout << "[GPU] Output disabled. No files were written.\n";
+    }
 
     return 0;
 }
