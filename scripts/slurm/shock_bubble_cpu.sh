@@ -18,4 +18,4 @@ export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 export OMP_PROC_BIND=true
 export OMP_PLACES=cores
 
-./main_cpu | tee outputs/cpu_omp8_stdout.txt
+./main_cpu | tee outputs/cpu_stdout.txt

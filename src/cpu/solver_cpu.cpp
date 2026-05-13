@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <vector>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -19,9 +20,7 @@ constexpr double kRhoFloor = 1.0e-12;
 constexpr double kPFloor   = 1.0e-12;
 
 inline double minmod_scalar(double a, double b) {
-    if (a * b <= 0.0) {
-        return 0.0;
-    }
+    if (a * b <= 0.0) return 0.0;
     return (a > 0.0) ? std::min(a, b) : std::max(a, b);
 }
 
@@ -90,6 +89,7 @@ inline void reconstruct_cell_muscl_hancock(
     U_right_star = enforce_physical_conserved(U_right - half_update, U_right);
 }
 
+// Flux at x-interface i+1/2, j
 inline Conserved muscl_hancock_flux_x(const Grid2D& U, int i, int j, double dt_over_dx) {
     Conserved Ui_L_star, Ui_R_star;
     Conserved Uip1_L_star, Uip1_R_star;
@@ -109,6 +109,7 @@ inline Conserved muscl_hancock_flux_x(const Grid2D& U, int i, int j, double dt_o
     return hll_flux(Ui_R_star, Uip1_L_star, Direction::X);
 }
 
+// Flux at y-interface i, j+1/2
 inline Conserved muscl_hancock_flux_y(const Grid2D& U, int i, int j, double dt_over_dy) {
     Conserved Uj_L_star, Uj_R_star;
     Conserved Ujp1_L_star, Ujp1_R_star;
@@ -128,49 +129,84 @@ inline Conserved muscl_hancock_flux_y(const Grid2D& U, int i, int j, double dt_o
     return hll_flux(Uj_R_star, Ujp1_L_star, Direction::Y);
 }
 
-void sweep_x_second_order(const Grid2D& Uin, Grid2D& Uout, double dt) {
+// Cache index helpers — identical to GPU version for easy cross-referencing
+inline int xface_idx(int local_j, int local_i_face, int nx_faces) {
+    return local_j * nx_faces + local_i_face;
+}
+
+inline int yface_idx(int local_j_face, int local_i, int nx_cells) {
+    return local_j_face * nx_cells + local_i;
+}
+
+// ============================================================
+// Fill fx_cache with all x-face fluxes for one time level.
+// Cache layout: (nx+1) faces per row, ny rows.
+// Face local_i_face = 0 corresponds to the left ghost interface
+// at global i = ib-1, so cell i maps to local_i_face = i-(ib-1).
+// ============================================================
+void fill_x_face_cache(
+    const Grid2D& Uin,
+    double dt,
+    std::vector<Conserved>& fx_cache   // pre-sized by CpuWorkspace
+) {
     const int ib = Uin.i_begin();
     const int ie = Uin.i_end();
     const int jb = Uin.j_begin();
     const int je = Uin.j_end();
 
+    const int nx_faces = (ie - ib) + 1;
     const double dt_over_dx = dt / Uin.dx();
 
 #ifdef _OPENMP
 #pragma omp parallel for collapse(2) schedule(static)
 #endif
     for (int j = jb; j < je; ++j) {
-        for (int i = ib; i < ie; ++i) {
-            const Conserved Fx_p = muscl_hancock_flux_x(Uin, i,     j, dt_over_dx);
-            const Conserved Fx_m = muscl_hancock_flux_x(Uin, i - 1, j, dt_over_dx);
-
-            Uout(i, j) = Uin(i, j) - dt_over_dx * (Fx_p - Fx_m);
+        for (int i = ib - 1; i < ie; ++i) {
+            const int local_j      = j - jb;
+            const int local_i_face = i - (ib - 1);
+            fx_cache[xface_idx(local_j, local_i_face, nx_faces)] =
+                muscl_hancock_flux_x(Uin, i, j, dt_over_dx);
         }
     }
 }
 
-void sweep_y_second_order(const Grid2D& Uin, Grid2D& Uout, double dt) {
+// ============================================================
+// Fill fy_cache with all y-face fluxes for one time level.
+// Cache layout: nx cells per row, (ny+1) face-rows.
+// Face local_j_face = 0 corresponds to the bottom ghost interface
+// at global j = jb-1, so cell j maps to local_j_face = j-(jb-1).
+// ============================================================
+void fill_y_face_cache(
+    const Grid2D& Uin,
+    double dt,
+    std::vector<Conserved>& fy_cache   // pre-sized by CpuWorkspace
+) {
     const int ib = Uin.i_begin();
     const int ie = Uin.i_end();
     const int jb = Uin.j_begin();
     const int je = Uin.j_end();
 
+    const int nx_cells = ie - ib;
     const double dt_over_dy = dt / Uin.dy();
 
 #ifdef _OPENMP
 #pragma omp parallel for collapse(2) schedule(static)
 #endif
-    for (int j = jb; j < je; ++j) {
+    for (int j = jb - 1; j < je; ++j) {
         for (int i = ib; i < ie; ++i) {
-            const Conserved Fy_p = muscl_hancock_flux_y(Uin, i, j,     dt_over_dy);
-            const Conserved Fy_m = muscl_hancock_flux_y(Uin, i, j - 1, dt_over_dy);
-
-            Uout(i, j) = Uin(i, j) - dt_over_dy * (Fy_p - Fy_m);
+            const int local_j_face = j - (jb - 1);
+            const int local_i      = i - ib;
+            fy_cache[yface_idx(local_j_face, local_i, nx_cells)] =
+                muscl_hancock_flux_y(Uin, i, j, dt_over_dy);
         }
     }
 }
 
 } // namespace
+
+// ============================================================
+// Public API
+// ============================================================
 
 double compute_dt(const Grid2D& grid, double cfl) {
     double max_speed = 0.0;
@@ -181,7 +217,7 @@ double compute_dt(const Grid2D& grid, double cfl) {
     for (int j = grid.j_begin(); j < grid.j_end(); ++j) {
         for (int i = grid.i_begin(); i < grid.i_end(); ++i) {
             const Primitive V = phys::cons_to_prim(grid(i, j));
-            const double a = phys::sound_speed(V);
+            const double a  = phys::sound_speed(V);
             const double sx = std::abs(V.u) + a;
             const double sy = std::abs(V.v) + a;
             max_speed = std::max(max_speed, std::max(sx, sy));
@@ -209,9 +245,9 @@ void advance_first_order(const Grid2D& Uold, Grid2D& Unew, double dt) {
 #endif
     for (int j = jb; j < je; ++j) {
         for (int i = ib; i < ie; ++i) {
-            const Conserved Fx_p = hll_flux(Uold(i, j),     Uold(i + 1, j), Direction::X);
+            const Conserved Fx_p = hll_flux(Uold(i,     j), Uold(i + 1, j), Direction::X);
             const Conserved Fx_m = hll_flux(Uold(i - 1, j), Uold(i,     j), Direction::X);
-            const Conserved Fy_p = hll_flux(Uold(i,     j), Uold(i, j + 1), Direction::Y);
+            const Conserved Fy_p = hll_flux(Uold(i, j    ), Uold(i, j + 1), Direction::Y);
             const Conserved Fy_m = hll_flux(Uold(i, j - 1), Uold(i,     j), Direction::Y);
 
             Unew(i, j) = Uold(i, j)
@@ -223,10 +259,91 @@ void advance_first_order(const Grid2D& Uold, Grid2D& Unew, double dt) {
     apply_transmissive_boundary(Unew);
 }
 
-void advance_second_order(const Grid2D& Uold, Grid2D& Utmp, Grid2D& Unew, double dt) {
-    sweep_x_second_order(Uold, Utmp, dt);
+// ============================================================
+// Second-order MUSCL-Hancock, x-then-y dimensional splitting.
+//
+// Mirrors advance_second_order_gpu exactly:
+//   1. fill x-face flux cache from Uold
+//   2. apply x update -> Utmp
+//   3. apply BC to Utmp
+//   4. fill y-face flux cache from Utmp
+//   5. apply y update -> Unew
+//   6. apply BC to Unew
+//
+// No heap allocation inside this function: both caches live in ws.
+// ============================================================
+void advance_second_order(
+    const Grid2D& Uold,
+    Grid2D& Utmp,
+    Grid2D& Unew,
+    double dt,
+    CpuWorkspace& ws
+) {
+    if (!ws.is_initialized()) {
+        throw std::runtime_error(
+            "advance_second_order: CpuWorkspace not initialised. "
+            "Call ws.init(cfg.nx, cfg.ny) before the time loop.");
+    }
+
+    const int ib = Uold.i_begin();
+    const int ie = Uold.i_end();
+    const int jb = Uold.j_begin();
+    const int je = Uold.j_end();
+
+    const int nx_faces = (ie - ib) + 1;
+    const int nx_cells =  ie - ib;
+    const double dt_over_dx = dt / Uold.dx();
+    const double dt_over_dy = dt / Uold.dy();
+
+    // ----------------------------------------------------------
+    // Step 1 & 2: x-sweep  (Uold -> Utmp)
+    // ----------------------------------------------------------
+    fill_x_face_cache(Uold, dt, ws.fx_cache);
+
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) schedule(static)
+#endif
+    for (int j = jb; j < je; ++j) {
+        for (int i = ib; i < ie; ++i) {
+            const int local_j        = j - jb;
+            const int local_i_face_m = (i - 1) - (ib - 1);
+            const int local_i_face_p =  i      - (ib - 1);
+
+            const Conserved& Fx_m = ws.fx_cache[xface_idx(local_j, local_i_face_m, nx_faces)];
+            const Conserved& Fx_p = ws.fx_cache[xface_idx(local_j, local_i_face_p, nx_faces)];
+
+            Utmp(i, j) = Uold(i, j) - dt_over_dx * (Fx_p - Fx_m);
+        }
+    }
+
+    // ----------------------------------------------------------
+    // Step 3: BC on Utmp  (fills ghost cells for y-sweep)
+    // ----------------------------------------------------------
     apply_transmissive_boundary(Utmp);
 
-    sweep_y_second_order(Utmp, Unew, dt);
+    // ----------------------------------------------------------
+    // Step 4 & 5: y-sweep  (Utmp -> Unew)
+    // ----------------------------------------------------------
+    fill_y_face_cache(Utmp, dt, ws.fy_cache);
+
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) schedule(static)
+#endif
+    for (int j = jb; j < je; ++j) {
+        for (int i = ib; i < ie; ++i) {
+            const int local_i        = i - ib;
+            const int local_j_face_m = (j - 1) - (jb - 1);
+            const int local_j_face_p =  j      - (jb - 1);
+
+            const Conserved& Fy_m = ws.fy_cache[yface_idx(local_j_face_m, local_i, nx_cells)];
+            const Conserved& Fy_p = ws.fy_cache[yface_idx(local_j_face_p, local_i, nx_cells)];
+
+            Unew(i, j) = Utmp(i, j) - dt_over_dy * (Fy_p - Fy_m);
+        }
+    }
+
+    // ----------------------------------------------------------
+    // Step 6: BC on Unew
+    // ----------------------------------------------------------
     apply_transmissive_boundary(Unew);
 }

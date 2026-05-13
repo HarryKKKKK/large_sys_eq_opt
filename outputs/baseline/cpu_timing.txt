@@ -1,30 +1,31 @@
 === CPU Timing Report ===
-case_name              : shock_bubble
-nx                     : 500
-ny                     : 197
-ng                     : 2
-x_min                  : 0.000000
-x_max                  : 0.225000
-y_min                  : 0.000000
-y_max                  : 0.089000
-cfl                    : 0.400000
-t_end                  : 0.001174
-final_time             : 0.001174
-total_steps            : 6359
-snapshots_written      : 5
+case_name                 : shock_bubble
+nx                        : 500
+ny                        : 197
+ng                        : 2
+x_min                     : 0.000000
+x_max                     : 0.225000
+y_min                     : 0.000000
+y_max                     : 0.089000
+cfl                       : 0.400000
+t_end                     : 0.001174
+final_time                : 0.001174
+total_steps               : 6359
+snapshots_written         : 5
 
-output_dir_time        : 0.000134 s
-config_and_init_time   : 0.002853 s
-snapshot_schedule_time : 0.000001 s
-main_loop_time         : 28.652872 s
-  boundary_time        : 0.021365 s
-  compute_dt_time      : 0.476213 s
-  advance_time         : 27.189484 s
-  snapshot_write_time  : 0.964928 s
-total_program_time     : 28.655860 s
+output_dir_time           : 0.000103 s
+config_and_init_time      : 0.002929 s
+workspace_alloc_time      : 0.001699 s
+snapshot_schedule_time    : 0.000001 s
+main_loop_time            : 17.109585 s
+  boundary_time           : 0.023984 s
+  compute_dt_time         : 0.519822 s
+  advance_time            : 15.292730 s
+  snapshot_write_time     : 1.271815 s
+total_program_time        : 17.114318 s
 
-avg_time_per_step      : 0.004506 s
-avg_boundary_per_step  : 0.000003 s
-avg_compute_dt_step    : 0.000075 s
-avg_advance_per_step   : 0.004276 s
-other_loop_time        : 0.000882 s
+avg_time_per_step         : 0.002691 s
+avg_boundary_per_step     : 0.000004 s
+avg_compute_dt_per_step   : 0.000082 s
+avg_advance_per_step      : 0.002405 s
+other_loop_time           : 0.001234 s
