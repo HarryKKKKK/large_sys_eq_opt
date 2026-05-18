@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gpu/grid_gpu.cuh"
+#include "riemann.hpp"
 
 #include <cstddef>
 
@@ -29,14 +30,16 @@ double compute_dt_gpu(
 
 void advance_first_order_gpu(
     const Grid2DGPU& Uold,
-    Grid2DGPU&       Unew,
-    double           dt
+    Grid2DGPU& Unew,
+    double dt,
+    RiemannSolver solver
 );
 
 void advance_second_order_gpu(
     const Grid2DGPU& Uold,
-    Grid2DGPU&       Utmp,
-    Grid2DGPU&       Unew,
-    GpuWorkspace&    ws,
-    double           dt
+    Grid2DGPU& Utmp,
+    Grid2DGPU& Unew,
+    GpuWorkspace& ws,
+    double dt,
+    RiemannSolver solver
 );

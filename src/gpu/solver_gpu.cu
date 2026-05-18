@@ -183,7 +183,8 @@ __global__ void compute_local_speed_kernel(ConstGrid2DGPUView grid, double* spee
 __global__ void advance_first_order_kernel(
     ConstGrid2DGPUView Uold,
     Grid2DGPUView Unew,
-    double dt
+    double dt,
+    RiemannSolver solver
 ) {
     const int i = blockIdx.x * blockDim.x + threadIdx.x + Uold.i_begin();
     const int j = blockIdx.y * blockDim.y + threadIdx.y + Uold.j_begin();
@@ -198,10 +199,10 @@ __global__ void advance_first_order_kernel(
     const Conserved Ujm = load_state(Uold, i, j - 1);
     const Conserved Ujp = load_state(Uold, i, j + 1);
 
-    const Conserved FxL = hll_flux(Uim, Uc,  Direction::X);
-    const Conserved FxR = hll_flux(Uc,  Uip, Direction::X);
-    const Conserved FyB = hll_flux(Ujm, Uc,  Direction::Y);
-    const Conserved FyT = hll_flux(Uc,  Ujp, Direction::Y);
+    const Conserved FxL = riemann_flux(Uim, Uc,  Direction::X, solver);
+    const Conserved FxR = riemann_flux(Uc,  Uip, Direction::X, solver);
+    const Conserved FyB = riemann_flux(Ujm, Uc,  Direction::Y, solver);
+    const Conserved FyT = riemann_flux(Uc,  Ujp, Direction::Y, solver);
 
     const double dtdx = dt / Uold.dx;
     const double dtdy = dt / Uold.dy;
@@ -227,7 +228,8 @@ __global__ void advance_first_order_kernel(
 __global__ void advance_x_reconstruct_smem_fused_kernel(
     ConstGrid2DGPUView Uin,
     Grid2DGPUView Uout,
-    double dt
+    double dt,
+    RiemannSolver solver
 ) {
     const int local_i = blockIdx.x * blockDim.x + threadIdx.x;
     const int local_j = blockIdx.y * blockDim.y + threadIdx.y;
@@ -402,7 +404,7 @@ __global__ void advance_x_reconstruct_smem_fused_kernel(
                 right_recon_idx
             );
 
-            const Conserved F = hll_flux(UL, UR, Direction::X);
+            const Conserved F = riemann_flux(UL, UR, Direction::X, solver);
 
             s_F_rho[linear]  = F.rho;
             s_F_rhou[linear] = F.rhou;
@@ -467,7 +469,8 @@ __global__ void advance_x_reconstruct_smem_fused_kernel(
 __global__ void advance_y_reconstruct_smem_fused_kernel(
     ConstGrid2DGPUView Uin,
     Grid2DGPUView Uout,
-    double dt
+    double dt,
+    RiemannSolver solver
 ) {
     const int local_i = blockIdx.x * blockDim.x + threadIdx.x;
     const int local_j = blockIdx.y * blockDim.y + threadIdx.y;
@@ -645,7 +648,7 @@ __global__ void advance_y_reconstruct_smem_fused_kernel(
                 upper_recon_idx
             );
 
-            const Conserved F = hll_flux(UL, UR, Direction::Y);
+            const Conserved F = riemann_flux(UL, UR, Direction::Y, solver);
 
             s_F_rho[linear]  = F.rho;
             s_F_rhou[linear] = F.rhou;
@@ -796,7 +799,12 @@ double compute_dt_gpu(const Grid2DGPU& grid, GpuWorkspace& ws, double cfl) {
 // First-order advance
 // -----------------------------------------------------------------------------
 
-void advance_first_order_gpu(const Grid2DGPU& Uold, Grid2DGPU& Unew, double dt) {
+void advance_first_order_gpu(
+    const Grid2DGPU& Uold,
+    Grid2DGPU& Unew,
+    double dt,
+    RiemannSolver solver
+) {
     const dim3 threads(16, 16);
 
     const dim3 blocks(
@@ -807,7 +815,8 @@ void advance_first_order_gpu(const Grid2DGPU& Uold, Grid2DGPU& Unew, double dt) 
     advance_first_order_kernel<<<blocks, threads>>>(
         make_view(Uold),
         make_view(Unew),
-        dt
+        dt,
+        solver
     );
 
     CUDA_CHECK(cudaGetLastError());
@@ -824,7 +833,8 @@ void advance_second_order_gpu(
     Grid2DGPU& Utmp,
     Grid2DGPU& Unew,
     GpuWorkspace& ws,
-    double dt
+    double dt,
+    RiemannSolver solver
 ) {
     if (ws.nx != Uold.nx() || ws.ny != Uold.ny() || ws.speed_d == nullptr) {
         throw std::runtime_error("advance_second_order_gpu: workspace not initialized for this grid.");
@@ -872,7 +882,8 @@ void advance_second_order_gpu(
     advance_x_reconstruct_smem_fused_kernel<<<blocks, threads, x_smem_bytes>>>(
         make_view(static_cast<const Grid2DGPU&>(Uold)),
         make_view(Utmp),
-        dt
+        dt,
+        solver
     );
 
     CUDA_CHECK(cudaGetLastError());
@@ -904,7 +915,8 @@ void advance_second_order_gpu(
     advance_y_reconstruct_smem_fused_kernel<<<blocks, threads, y_smem_bytes>>>(
         make_view(static_cast<const Grid2DGPU&>(Utmp)),
         make_view(Unew),
-        dt
+        dt,
+        solver
     );
 
     CUDA_CHECK(cudaGetLastError());

@@ -7,6 +7,8 @@
 #include "gpu/grid_gpu.cuh"
 #include "gpu/solver_gpu.cuh"
 
+#include "riemann.hpp"
+
 #include <cuda_runtime.h>
 
 #include <algorithm>
@@ -17,6 +19,7 @@
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -47,6 +50,9 @@ struct RunOptions {
     int resolution_scale = 1;
     bool write_output = false;
     int num_snapshots = 5;
+
+    RiemannSolver solver = RiemannSolver::HLL;
+    std::string solver_name = "hll";
 };
 
 inline void cuda_check(cudaError_t err, const char* call, const char* file, int line) {
@@ -59,6 +65,32 @@ inline void cuda_check(cudaError_t err, const char* call, const char* file, int 
 }
 
 #define CUDA_CHECK(call) cuda_check((call), #call, __FILE__, __LINE__)
+
+RiemannSolver parse_riemann_solver(const std::string& name) {
+    if (name == "hll" || name == "HLL") {
+        return RiemannSolver::HLL;
+    }
+
+    if (name == "hllc" || name == "HLLC") {
+        return RiemannSolver::HLLC;
+    }
+
+    throw std::runtime_error(
+        "Unknown Riemann solver: " + name +
+        ". Supported solvers are: hll, hllc."
+    );
+}
+
+std::string riemann_solver_to_string(RiemannSolver solver) {
+    switch (solver) {
+        case RiemannSolver::HLL:
+            return "hll";
+        case RiemannSolver::HLLC:
+            return "hllc";
+        default:
+            return "unknown";
+    }
+}
 
 RunOptions parse_run_options(int argc, char** argv) {
     RunOptions opts;
@@ -76,7 +108,21 @@ RunOptions parse_run_options(int argc, char** argv) {
         } else if (arg == "--timing-only") {
             opts.write_output = true;
             opts.num_snapshots = 0;
+        } else if (arg == "--solver") {
+            if (i + 1 >= argc) {
+                throw std::runtime_error("--solver requires a value: hll or hllc.");
+            }
+
+            opts.solver_name = argv[++i];
+            opts.solver = parse_riemann_solver(opts.solver_name);
+            opts.solver_name = riemann_solver_to_string(opts.solver);
+        } else {
+            throw std::runtime_error("Unknown argument: " + arg);
         }
+    }
+
+    if (opts.resolution_scale <= 0) {
+        throw std::runtime_error("resolution_scale must be positive.");
     }
 
     return opts;
@@ -129,7 +175,7 @@ void write_aos_csv(const std::vector<Conserved>& data,
 void write_timing_report(const std::string& filename,
                          const std::string& case_name,
                          const CaseConfig& cfg,
-                         int resolution_scale,
+                         const RunOptions& opts,
                          int step,
                          double final_time,
                          int num_snapshots_written,
@@ -139,7 +185,8 @@ void write_timing_report(const std::string& filename,
 
     out << "=== GPU Timing Report ===\n";
     out << "case_name                 : " << case_name << "\n";
-    out << "resolution_scale          : " << resolution_scale << "\n";
+    out << "riemann_solver            : " << opts.solver_name << "\n";
+    out << "resolution_scale          : " << opts.resolution_scale << "\n";
     out << "nx                        : " << cfg.nx << "\n";
     out << "ny                        : " << cfg.ny << "\n";
     out << "total_cells               : "
@@ -255,6 +302,7 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "[GPU] case_name          : " << case_name << "\n";
+    std::cout << "[GPU] riemann_solver     : " << opts.solver_name << "\n";
     std::cout << "[GPU] resolution_scale   : " << opts.resolution_scale << "\n";
     std::cout << "[GPU] nx                 : " << cfg.nx << "\n";
     std::cout << "[GPU] ny                 : " << cfg.ny << "\n";
@@ -375,7 +423,15 @@ int main(int argc, char** argv) {
         {
             const auto t0 = Clock::now();
 
-            advance_second_order_gpu(d_U, d_U_mid, d_U_next, ws, dt);
+            advance_second_order_gpu(
+                d_U,
+                d_U_mid,
+                d_U_next,
+                ws,
+                dt,
+                opts.solver
+            );
+
             CUDA_CHECK(cudaDeviceSynchronize());
             d_U.swap(d_U_next);
 
@@ -402,7 +458,10 @@ int main(int argc, char** argv) {
             }
 
             std::ostringstream snapshot_prefix;
-            snapshot_prefix << "gpu_n" << opts.resolution_scale;
+            snapshot_prefix << "gpu_"
+                            << opts.solver_name
+                            << "_n"
+                            << opts.resolution_scale;
 
             const std::string filename =
                 make_snapshot_name(snapshot_prefix.str(), next_snapshot + 1);
@@ -451,7 +510,10 @@ int main(int argc, char** argv) {
 
     if (opts.write_output) {
         std::ostringstream timing_prefix;
-        timing_prefix << "gpu_n" << opts.resolution_scale;
+        timing_prefix << "gpu_"
+                      << opts.solver_name
+                      << "_n"
+                      << opts.resolution_scale;
 
         const std::string timing_file = make_timing_name(timing_prefix.str());
 
@@ -459,7 +521,7 @@ int main(int argc, char** argv) {
             timing_file,
             case_name,
             cfg,
-            opts.resolution_scale,
+            opts,
             step,
             t,
             next_snapshot,

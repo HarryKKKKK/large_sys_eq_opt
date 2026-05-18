@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cpu/grid_cpu.hpp"
+#include "riemann.hpp"
 #include "types.hpp"
 
 #include <cstddef>
@@ -41,7 +42,16 @@ struct CpuWorkspace {
 // CFL timestep
 double compute_dt(const Grid2D& grid, double cfl);
 
-// First-order Godunov (kept for reference / debugging)
+// First-order Godunov, configurable Riemann solver.
+void advance_first_order(
+    const Grid2D& Uold,
+    Grid2D& Unew,
+    double dt,
+    RiemannSolver solver
+);
+
+// First-order Godunov, default HLL version.
+// Kept for backwards compatibility.
 void advance_first_order(
     const Grid2D& Uold,
     Grid2D& Unew,
@@ -50,6 +60,17 @@ void advance_first_order(
 
 // Second-order MUSCL-Hancock, dimensional splitting.
 // ws must be initialised with ws.init(cfg.nx, cfg.ny) before the time loop.
+void advance_second_order(
+    const Grid2D& Uold,
+    Grid2D& Utmp,
+    Grid2D& Unew,
+    double dt,
+    CpuWorkspace& ws,
+    RiemannSolver solver
+);
+
+// Second-order MUSCL-Hancock, default HLL version.
+// Kept for backwards compatibility.
 void advance_second_order(
     const Grid2D& Uold,
     Grid2D& Utmp,
