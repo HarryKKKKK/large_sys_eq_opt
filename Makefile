@@ -15,9 +15,6 @@ NVCCFLAGS_BASE += $(CUDA_ARCH)
 # =========================
 OMPFLAGS := -fopenmp
 
-# By default, build CPU with OpenMP enabled.
-# If you want a pure serial baseline:
-#   make cpu_serial
 CXXFLAGS  := $(CXXFLAGS_BASE) $(OMPFLAGS)
 NVCCFLAGS := $(NVCCFLAGS_BASE)
 

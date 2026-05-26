@@ -1,0 +1,34 @@
+=== CPU Timing Report ===
+case_name                 : blast_wave
+riemann_solver            : hll
+resolution_scale          : 1
+nx                        : 500
+ny                        : 500
+total_cells               : 250000
+ng                        : 2
+x_min                     : 0.000000
+x_max                     : 1.000000
+y_min                     : 0.000000
+y_max                     : 1.000000
+cfl                       : 0.400000
+t_end                     : 0.200000
+final_time                : 0.200000
+total_steps               : 2306
+snapshots_written         : 5
+
+output_dir_time           : 0.000015 s
+config_and_init_time      : 0.009555 s
+workspace_alloc_time      : 0.000007 s
+snapshot_schedule_time    : 0.000000 s
+main_loop_time            : 15.945693 s
+  boundary_time           : 0.005107 s
+  compute_dt_time         : 0.355744 s
+  advance_time            : 13.711926 s
+  snapshot_write_time     : 1.872568 s
+total_program_time        : 15.955294 s
+
+avg_time_per_step         : 0.006915 s
+avg_boundary_per_step     : 0.000002 s
+avg_compute_dt_per_step   : 0.000154 s
+avg_advance_per_step      : 0.005946 s
+other_loop_time           : 0.000347 s

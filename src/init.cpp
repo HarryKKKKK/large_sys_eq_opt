@@ -1,6 +1,7 @@
 #include "init.hpp"
 
 #include <stdexcept>
+#include <string>
 
 namespace {
 
@@ -30,6 +31,7 @@ void initialise_grid(Grid2D& grid, CaseId case_id) {
         for (int i = 0; i < grid.total_nx(); ++i) {
             const double x = cell_center_x(grid, i);
             const double y = cell_center_y(grid, j);
+
             grid(i, j) = initial_state_at(case_id, x, y);
         }
     }

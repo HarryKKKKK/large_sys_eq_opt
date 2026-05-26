@@ -1,0 +1,17 @@
+arch,case,solver,n,nx,ny,total_cells,total_steps,main_loop_time,boundary_time,compute_dt_time,advance_time,total_program_time,avg_time_per_step,log_file
+cpu,shock_bubble,hll,1,500,197,98500,6359,13.769025,0.008629,0.346548,13.413390,13.772775,0.002165,logs/cpu_timing_shock_bubble_hll_n1_10999.log
+gpu,shock_bubble,hll,1,500,197,98500,6359,1.625260,0.097198,0.148100,1.379550,1.838146,0.000256,logs/gpu_timing_shock_bubble_hll_n1_10999.log
+cpu,shock_bubble,hllc,1,500,197,98500,6913,15.045074,0.009360,0.347718,14.687473,15.049118,0.002176,logs/cpu_timing_shock_bubble_hllc_n1_10999.log
+gpu,shock_bubble,hllc,1,500,197,98500,6913,1.818494,0.105067,0.161134,1.551846,2.029870,0.000263,logs/gpu_timing_shock_bubble_hllc_n1_10999.log
+cpu,shock_bubble,exact,1,500,197,98500,6912,29.025151,0.009350,0.348164,28.667099,29.029391,0.004199,logs/cpu_timing_shock_bubble_exact_n1_10999.log
+gpu,shock_bubble,exact,1,500,197,98500,6912,5.326749,0.100319,0.161042,5.064935,5.543500,0.000771,logs/gpu_timing_shock_bubble_exact_n1_10999.log
+cpu,shock_bubble,force,1,500,197,98500,6539,14.951929,0.008803,0.351688,14.590938,14.955939,0.002287,logs/cpu_timing_shock_bubble_force_n1_10999.log
+gpu,shock_bubble,force,1,500,197,98500,6539,1.660709,0.098820,0.152486,1.408969,1.879984,0.000254,logs/gpu_timing_shock_bubble_force_n1_10999.log
+cpu,blast_wave,hll,1,500,500,250000,2306,14.106832,0.004968,0.360851,13.740825,14.116204,0.006117,logs/cpu_timing_blast_wave_hll_n1_10999.log
+gpu,blast_wave,hll,1,500,500,250000,2306,1.027160,0.043393,0.077258,0.906357,1.246306,0.000445,logs/gpu_timing_blast_wave_hll_n1_10999.log
+cpu,blast_wave,hllc,1,500,500,250000,2335,12.910056,0.005023,0.298359,12.606476,12.919814,0.005529,logs/cpu_timing_blast_wave_hllc_n1_10999.log
+gpu,blast_wave,hllc,1,500,500,250000,2335,1.065477,0.043079,0.078167,0.944075,1.285690,0.000456,logs/gpu_timing_blast_wave_hllc_n1_10999.log
+cpu,blast_wave,exact,1,500,500,250000,2334,25.307585,0.005205,0.299952,25.002176,25.317494,0.010843,logs/cpu_timing_blast_wave_exact_n1_10999.log
+gpu,blast_wave,exact,1,500,500,250000,2334,3.493229,0.044027,0.078453,3.370595,3.719033,0.001497,logs/gpu_timing_blast_wave_exact_n1_10999.log
+cpu,blast_wave,force,1,500,500,250000,2308,15.084843,0.004845,0.357969,14.721830,15.094622,0.006536,logs/cpu_timing_blast_wave_force_n1_10999.log
+gpu,blast_wave,force,1,500,500,250000,2308,1.006588,0.042480,0.077430,0.886528,1.228434,0.000436,logs/gpu_timing_blast_wave_force_n1_10999.log

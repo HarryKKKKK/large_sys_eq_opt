@@ -1,0 +1,34 @@
+=== CPU Timing Report ===
+case_name                 : shock_bubble
+riemann_solver            : hll
+resolution_scale          : 1
+nx                        : 500
+ny                        : 197
+total_cells               : 98500
+ng                        : 2
+x_min                     : 0.000000
+x_max                     : 0.225000
+y_min                     : 0.000000
+y_max                     : 0.089000
+cfl                       : 0.400000
+t_end                     : 0.001174
+final_time                : 0.001174
+total_steps               : 6359
+snapshots_written         : 5
+
+output_dir_time           : 0.000026 s
+config_and_init_time      : 0.004309 s
+workspace_alloc_time      : 0.000007 s
+snapshot_schedule_time    : 0.000000 s
+main_loop_time            : 15.202504 s
+  boundary_time           : 0.008608 s
+  compute_dt_time         : 0.353136 s
+  advance_time            : 13.904953 s
+  snapshot_write_time     : 0.935238 s
+total_program_time        : 15.206874 s
+
+avg_time_per_step         : 0.002391 s
+avg_boundary_per_step     : 0.000001 s
+avg_compute_dt_per_step   : 0.000056 s
+avg_advance_per_step      : 0.002187 s
+other_loop_time           : 0.000569 s

@@ -1,0 +1,17 @@
+arch,case,solver,n,nx,ny,total_cells,total_steps,main_loop_time,boundary_time,compute_dt_time,advance_time,total_program_time,avg_time_per_step,log_file
+cpu,shock_bubble,hll,1,,,,,,,,,,,logs/cpu_timing_shock_bubble_hll_n1_10996.log
+gpu,shock_bubble,hll,1,500,197,98500,6359,1.625573,0.097121,0.148149,1.379894,1.832978,0.000256,logs/gpu_timing_shock_bubble_hll_n1_10996.log
+cpu,shock_bubble,hllc,1,,,,,,,,,,,logs/cpu_timing_shock_bubble_hllc_n1_10996.log
+gpu,shock_bubble,hllc,1,500,197,98500,6913,1.817488,0.104254,0.160979,1.551808,2.028130,0.000263,logs/gpu_timing_shock_bubble_hllc_n1_10996.log
+cpu,shock_bubble,exact,1,,,,,,,,,,,logs/cpu_timing_shock_bubble_exact_n1_10996.log
+gpu,shock_bubble,exact,1,,,,,,,,,,,logs/gpu_timing_shock_bubble_exact_n1_10996.log
+cpu,shock_bubble,force,1,,,,,,,,,,,logs/cpu_timing_shock_bubble_force_n1_10996.log
+gpu,shock_bubble,force,1,,,,,,,,,,,logs/gpu_timing_shock_bubble_force_n1_10996.log
+cpu,blast_wave,hll,1,,,,,,,,,,,logs/cpu_timing_blast_wave_hll_n1_10996.log
+gpu,blast_wave,hll,1,500,500,250000,2306,1.026712,0.042960,0.077238,0.906355,1.240549,0.000445,logs/gpu_timing_blast_wave_hll_n1_10996.log
+cpu,blast_wave,hllc,1,,,,,,,,,,,logs/cpu_timing_blast_wave_hllc_n1_10996.log
+gpu,blast_wave,hllc,1,500,500,250000,2335,1.065463,0.043174,0.078234,0.943902,1.279197,0.000456,logs/gpu_timing_blast_wave_hllc_n1_10996.log
+cpu,blast_wave,exact,1,,,,,,,,,,,logs/cpu_timing_blast_wave_exact_n1_10996.log
+gpu,blast_wave,exact,1,,,,,,,,,,,logs/gpu_timing_blast_wave_exact_n1_10996.log
+cpu,blast_wave,force,1,,,,,,,,,,,logs/cpu_timing_blast_wave_force_n1_10996.log
+gpu,blast_wave,force,1,,,,,,,,,,,logs/gpu_timing_blast_wave_force_n1_10996.log

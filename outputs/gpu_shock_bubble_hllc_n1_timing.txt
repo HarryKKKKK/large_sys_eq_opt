@@ -1,0 +1,37 @@
+=== GPU Timing Report ===
+case_name                 : shock_bubble
+riemann_solver            : hllc
+resolution_scale          : 1
+nx                        : 500
+ny                        : 197
+total_cells               : 98500
+ng                        : 2
+x_min                     : 0.000000
+x_max                     : 0.225000
+y_min                     : 0.000000
+y_max                     : 0.089000
+cfl                       : 0.400000
+t_end                     : 0.001174
+final_time                : 0.001174
+total_steps               : 6913
+snapshots_written         : 5
+
+output_dir_time           : 0.000212 s
+config_and_host_init_time : 0.001754 s
+device_alloc_time         : 0.201436 s
+workspace_alloc_time      : 0.005354 s
+upload_h2d_time           : 0.001582 s
+snapshot_schedule_time    : 0.000000 s
+main_loop_time            : 2.739620 s
+  boundary_time           : 0.104932 s
+  compute_dt_time         : 0.161039 s
+  advance_time            : 1.551766 s
+  snapshot_download_time  : 0.004911 s
+  snapshot_write_time     : 0.916386 s
+total_program_time        : 2.950195 s
+
+avg_time_per_step         : 0.000396 s
+avg_boundary_per_step     : 0.000015 s
+avg_compute_dt_per_step   : 0.000023 s
+avg_advance_per_step      : 0.000224 s
+other_loop_time           : 0.000586 s

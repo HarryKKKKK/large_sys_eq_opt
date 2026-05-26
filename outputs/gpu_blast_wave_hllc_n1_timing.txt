@@ -1,0 +1,37 @@
+=== GPU Timing Report ===
+case_name                 : blast_wave
+riemann_solver            : hllc
+resolution_scale          : 1
+nx                        : 500
+ny                        : 500
+total_cells               : 250000
+ng                        : 2
+x_min                     : 0.000000
+x_max                     : 1.000000
+y_min                     : 0.000000
+y_max                     : 1.000000
+cfl                       : 0.400000
+t_end                     : 0.200000
+final_time                : 0.200000
+total_steps               : 2335
+snapshots_written         : 5
+
+output_dir_time           : 0.000168 s
+config_and_host_init_time : 0.004214 s
+device_alloc_time         : 0.199421 s
+workspace_alloc_time      : 0.005303 s
+upload_h2d_time           : 0.004039 s
+snapshot_schedule_time    : 0.000000 s
+main_loop_time            : 2.716978 s
+  boundary_time           : 0.043811 s
+  compute_dt_time         : 0.078366 s
+  advance_time            : 0.943888 s
+  snapshot_download_time  : 0.028827 s
+  snapshot_write_time     : 1.617513 s
+total_program_time        : 2.930300 s
+
+avg_time_per_step         : 0.001164 s
+avg_boundary_per_step     : 0.000019 s
+avg_compute_dt_per_step   : 0.000034 s
+avg_advance_per_step      : 0.000404 s
+other_loop_time           : 0.004573 s

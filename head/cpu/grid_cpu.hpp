@@ -21,7 +21,8 @@ public:
 
         const int total_x = nx_ + 2 * ng_;
         const int total_y = ny_ + 2 * ng_;
-        U_.assign(static_cast<std::size_t>(total_x * total_y), Conserved{});
+        const Conserved zero_state{0.0, 0.0, 0.0, 0.0};
+        U_.assign(static_cast<std::size_t>(total_x * total_y), zero_state);
     }
 
     int nx() const { return nx_; }

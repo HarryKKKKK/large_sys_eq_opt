@@ -51,6 +51,8 @@ struct RunOptions {
     bool write_output = false;
     int num_snapshots = 5;
 
+    std::string case_name = "shock_bubble";
+
     RiemannSolver solver = RiemannSolver::HLL;
     std::string solver_name = "hll";
 };
@@ -75,6 +77,14 @@ RiemannSolver parse_riemann_solver(const std::string& name) {
         return RiemannSolver::HLLC;
     }
 
+    if (name == "exact" || name == "Exact" || name == "EXACT") {
+        return RiemannSolver::Exact;
+    }
+
+    if (name == "force" || name == "Force" || name == "FORCE") {
+        return RiemannSolver::FORCE;
+    }
+
     throw std::runtime_error(
         "Unknown Riemann solver: " + name +
         ". Supported solvers are: hll, hllc."
@@ -87,6 +97,10 @@ std::string riemann_solver_to_string(RiemannSolver solver) {
             return "hll";
         case RiemannSolver::HLLC:
             return "hllc";
+        case RiemannSolver::Exact:
+            return "exact";
+        case RiemannSolver::FORCE:
+            return "force";
         default:
             return "unknown";
     }
@@ -108,6 +122,15 @@ RunOptions parse_run_options(int argc, char** argv) {
         } else if (arg == "--timing-only") {
             opts.write_output = true;
             opts.num_snapshots = 0;
+        } else if (arg == "--case") {
+            if (i + 1 >= argc) {
+                throw std::runtime_error("--case requires a value, e.g. shock_bubble or blast_wave.");
+            }
+
+            opts.case_name = argv[++i];
+
+            // Validate case name early.
+            (void)parse_case_id(opts.case_name);
         } else if (arg == "--solver") {
             if (i + 1 >= argc) {
                 throw std::runtime_error("--solver requires a value: hll or hllc.");
@@ -173,9 +196,8 @@ void write_aos_csv(const std::vector<Conserved>& data,
 }
 
 void write_timing_report(const std::string& filename,
-                         const std::string& case_name,
-                         const CaseConfig& cfg,
                          const RunOptions& opts,
+                         const CaseConfig& cfg,
                          int step,
                          double final_time,
                          int num_snapshots_written,
@@ -184,7 +206,7 @@ void write_timing_report(const std::string& filename,
     out << std::fixed << std::setprecision(6);
 
     out << "=== GPU Timing Report ===\n";
-    out << "case_name                 : " << case_name << "\n";
+    out << "case_name                 : " << opts.case_name << "\n";
     out << "riemann_solver            : " << opts.solver_name << "\n";
     out << "resolution_scale          : " << opts.resolution_scale << "\n";
     out << "nx                        : " << cfg.nx << "\n";
@@ -283,25 +305,20 @@ int main(int argc, char** argv) {
         timings.output_dir_time = Seconds(t1 - t0).count();
     }
 
-    const std::string case_name = "shock_bubble";
-
     CaseConfig cfg;
     Grid2D host_init;
 
     {
         const auto t0 = Clock::now();
 
-        cfg = get_case_config(case_name);
-        cfg.nx *= opts.resolution_scale;
-        cfg.ny *= opts.resolution_scale;
-
-        host_init = make_n_grid(case_name, opts.resolution_scale);
+        cfg = get_n_case_config(opts.case_name, opts.resolution_scale);
+        host_init = make_n_grid(opts.case_name, opts.resolution_scale);
 
         const auto t1 = Clock::now();
         timings.config_and_host_init_time = Seconds(t1 - t0).count();
     }
 
-    std::cout << "[GPU] case_name          : " << case_name << "\n";
+    std::cout << "[GPU] case_name          : " << opts.case_name << "\n";
     std::cout << "[GPU] riemann_solver     : " << opts.solver_name << "\n";
     std::cout << "[GPU] resolution_scale   : " << opts.resolution_scale << "\n";
     std::cout << "[GPU] nx                 : " << cfg.nx << "\n";
@@ -380,7 +397,8 @@ int main(int argc, char** argv) {
         snapshot_times.reserve(num_snapshots);
         for (int k = 1; k <= num_snapshots; ++k) {
             snapshot_times.push_back(
-                cfg.t_end * static_cast<double>(k) / static_cast<double>(num_snapshots)
+                cfg.t_end * static_cast<double>(k) /
+                static_cast<double>(num_snapshots)
             );
         }
 
@@ -459,6 +477,8 @@ int main(int argc, char** argv) {
 
             std::ostringstream snapshot_prefix;
             snapshot_prefix << "gpu_"
+                            << opts.case_name
+                            << "_"
                             << opts.solver_name
                             << "_n"
                             << opts.resolution_scale;
@@ -511,6 +531,8 @@ int main(int argc, char** argv) {
     if (opts.write_output) {
         std::ostringstream timing_prefix;
         timing_prefix << "gpu_"
+                      << opts.case_name
+                      << "_"
                       << opts.solver_name
                       << "_n"
                       << opts.resolution_scale;
@@ -519,9 +541,8 @@ int main(int argc, char** argv) {
 
         write_timing_report(
             timing_file,
-            case_name,
-            cfg,
             opts,
+            cfg,
             step,
             t,
             next_snapshot,

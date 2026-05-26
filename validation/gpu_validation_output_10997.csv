@@ -1,0 +1,5 @@
+arch,case,solver,n,nx,ny,total_cells,total_steps,main_loop_time,boundary_time,compute_dt_time,advance_time,total_program_time,avg_time_per_step,log_file
+gpu,shock_bubble,exact,1,,,,,,,,,,,logs/gpu_output_shock_bubble_exact_n1_10997.log
+gpu,shock_bubble,force,1,,,,,,,,,,,logs/gpu_output_shock_bubble_force_n1_10997.log
+gpu,blast_wave,exact,1,,,,,,,,,,,logs/gpu_output_blast_wave_exact_n1_10997.log
+gpu,blast_wave,force,1,,,,,,,,,,,logs/gpu_output_blast_wave_force_n1_10997.log
