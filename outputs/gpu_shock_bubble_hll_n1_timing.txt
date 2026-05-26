@@ -16,22 +16,22 @@ final_time                : 0.001174
 total_steps               : 6359
 snapshots_written         : 5
 
-output_dir_time           : 0.000012 s
-config_and_host_init_time : 0.001687 s
-device_alloc_time         : 0.202927 s
-workspace_alloc_time      : 0.009519 s
-upload_h2d_time           : 0.001445 s
-snapshot_schedule_time    : 0.000000 s
-main_loop_time            : 2.408017 s
-  boundary_time           : 0.097040 s
-  compute_dt_time         : 0.148240 s
-  advance_time            : 1.379736 s
-  snapshot_download_time  : 0.004020 s
-  snapshot_write_time     : 0.778470 s
-total_program_time        : 2.623888 s
+output_dir_time           : 0.000013 s
+config_and_host_init_time : 0.002469 s
+device_alloc_time         : 0.224853 s
+workspace_alloc_time      : 1.583571 s
+upload_h2d_time           : 0.000586 s
+snapshot_schedule_time    : 0.000001 s
+main_loop_time            : 2.140716 s
+  boundary_time           : 0.000000 s
+  compute_dt_time         : 1.155971 s
+  advance_time            : 0.019127 s
+  snapshot_download_time  : 0.003382 s
+  snapshot_write_time     : 0.961863 s
+total_program_time        : 3.952287 s
 
-avg_time_per_step         : 0.000379 s
-avg_boundary_per_step     : 0.000015 s
-avg_compute_dt_per_step   : 0.000023 s
-avg_advance_per_step      : 0.000217 s
-other_loop_time           : 0.000509 s
+avg_time_per_step         : 0.000337 s
+avg_boundary_per_step     : 0.000000 s
+avg_compute_dt_per_step   : 0.000182 s
+avg_advance_per_step      : 0.000003 s
+other_loop_time           : 0.000373 s

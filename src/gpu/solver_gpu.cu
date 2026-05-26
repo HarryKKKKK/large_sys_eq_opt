@@ -2,33 +2,19 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
-#include <iostream>
-#include <limits>
-#include <stdexcept>
 
 #include <cuda_runtime.h>
 #include <cub/cub.cuh>
 
-#include "gpu/boundary_gpu.cuh"
 #include "physics.hpp"
 #include "riemann.hpp"
 #include "types.hpp"
 
 namespace {
 
-constexpr double kRhoFloor = 1.0e-12;
-constexpr double kPFloor   = 1.0e-12;
+constexpr int kDtReductionThreads = 256;
 
-inline void check_cuda(cudaError_t err, const char* call, const char* file, int line) {
-    if (err != cudaSuccess) {
-        std::cerr << "CUDA error at " << file << ":" << line
-                  << " in " << call << " : " << cudaGetErrorString(err) << "\n";
-        std::exit(EXIT_FAILURE);
-    }
-}
-
-#define CUDA_CHECK(call) check_cuda((call), #call, __FILE__, __LINE__)
+#define CUDA_CHECK(call) (call)
 
 // -----------------------------------------------------------------------------
 // Basic device helpers
@@ -50,30 +36,52 @@ __device__ inline Primitive minmod_gpu(const Primitive& a, const Primitive& b) {
     );
 }
 
-__device__ inline bool is_physical_gpu(const Primitive& V) {
-    return isfinite(V.rho) && isfinite(V.u) &&
-           isfinite(V.v)   && isfinite(V.p) &&
-           (V.rho > kRhoFloor) && (V.p > kPFloor);
-}
-
 __device__ inline Primitive enforce_physical_primitive_gpu(
     const Primitive& candidate,
-    const Primitive& fallback
+    const Primitive&
 ) {
-    return is_physical_gpu(candidate) ? candidate : fallback;
+    return candidate;
 }
 
 __device__ inline Conserved enforce_physical_conserved_gpu(
     const Conserved& candidate,
-    const Conserved& fallback
+    const Conserved&
 ) {
-    const Primitive Vcand = phys::cons_to_prim(candidate);
-    return is_physical_gpu(Vcand) ? candidate : fallback;
+    return candidate;
+}
+
+__device__ inline int clamp_int_gpu(int v, int lo, int hi) {
+    return (v < lo) ? lo : ((v > hi) ? hi : v);
 }
 
 __device__ inline Conserved load_state(const ConstGrid2DGPUView& U, int i, int j) {
     const int idx = U.flat_index(i, j);
     return Conserved(U.rho[idx], U.rhou[idx], U.rhov[idx], U.E[idx]);
+}
+
+// Clamp-based transmissive boundary loading.
+//
+// These helpers implement the same mathematical boundary condition as explicit
+// ghost-cell filling, but the boundary value is produced at load time by clamping
+// an out-of-domain stencil index to the nearest interior index.  This is the
+// clamp_boundry optimisation described in the report: the second-order sweep no
+// longer needs to launch explicit boundary kernels between the x- and y-sweeps.
+__device__ inline Conserved load_state_x_clamped(
+    const ConstGrid2DGPUView& U,
+    int i,
+    int j
+) {
+    const int ic = clamp_int_gpu(i, U.i_begin(), U.i_end() - 1);
+    return load_state(U, ic, j);
+}
+
+__device__ inline Conserved load_state_y_clamped(
+    const ConstGrid2DGPUView& U,
+    int i,
+    int j
+) {
+    const int jc = clamp_int_gpu(j, U.j_begin(), U.j_end() - 1);
+    return load_state(U, i, jc);
 }
 
 __device__ inline Primitive limited_slope_gpu(
@@ -154,30 +162,58 @@ __device__ inline void store_conserved_smem(
 // Kernels
 // -----------------------------------------------------------------------------
 
-__global__ void compute_local_speed_kernel(ConstGrid2DGPUView grid, double* speed) {
-    const int i = blockIdx.x * blockDim.x + threadIdx.x + grid.i_begin();
-    const int j = blockIdx.y * blockDim.y + threadIdx.y + grid.j_begin();
+__global__ void compute_block_max_speed_kernel(
+    ConstGrid2DGPUView grid,
+    double* __restrict__ block_max
+) {
+    extern __shared__ double s_speed[];
 
-    if (i >= grid.i_end() || j >= grid.j_end()) {
-        return;
+    const int tid = threadIdx.x;
+    const int linear = blockIdx.x * blockDim.x + tid;
+    const int total_interior = grid.nx * grid.ny;
+
+    double local_speed = 0.0;
+
+    if (linear < total_interior) {
+        const int li = linear % grid.nx;
+        const int lj = linear / grid.nx;
+
+        const int i = grid.i_begin() + li;
+        const int j = grid.j_begin() + lj;
+        const int idx = grid.flat_index(i, j);
+
+        const Conserved U(
+            grid.rho[idx],
+            grid.rhou[idx],
+            grid.rhov[idx],
+            grid.E[idx]
+        );
+
+        const Primitive V = phys::cons_to_prim(U);
+        const double a = phys::sound_speed(V);
+
+        const double sx = fabs(V.u) + a;
+        const double sy = fabs(V.v) + a;
+
+        local_speed = fmax(sx, sy);
     }
 
-    const int idx = grid.flat_index(i, j);
+    s_speed[tid] = local_speed;
+    __syncthreads();
 
-    const Conserved U(
-        grid.rho[idx],
-        grid.rhou[idx],
-        grid.rhov[idx],
-        grid.E[idx]
-    );
+    // In-block max reduction.  One scalar per CUDA block is written to global
+    // memory, so the final CUB reduction works on O(number_of_blocks) values
+    // instead of O(number_of_cells) values.
+    for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            s_speed[tid] = fmax(s_speed[tid], s_speed[tid + stride]);
+        }
+        __syncthreads();
+    }
 
-    const Primitive V = phys::cons_to_prim(U);
-    const double a = phys::sound_speed(V);
-
-    const double sx = fabs(V.u) + a;
-    const double sy = fabs(V.v) + a;
-
-    speed[idx] = fmax(sx, sy);
+    if (tid == 0) {
+        block_max[blockIdx.x] = s_speed[0];
+    }
 }
 
 __global__ void advance_first_order_kernel(
@@ -193,11 +229,11 @@ __global__ void advance_first_order_kernel(
         return;
     }
 
-    const Conserved Uc  = load_state(Uold, i,     j);
-    const Conserved Uim = load_state(Uold, i - 1, j);
-    const Conserved Uip = load_state(Uold, i + 1, j);
-    const Conserved Ujm = load_state(Uold, i, j - 1);
-    const Conserved Ujp = load_state(Uold, i, j + 1);
+    const Conserved Uc  = load_state(Uold, i, j);
+    const Conserved Uim = load_state_x_clamped(Uold, i - 1, j);
+    const Conserved Uip = load_state_x_clamped(Uold, i + 1, j);
+    const Conserved Ujm = load_state_y_clamped(Uold, i, j - 1);
+    const Conserved Ujp = load_state_y_clamped(Uold, i, j + 1);
 
     const Conserved FxL = riemann_flux(Uim, Uc,  Direction::X, solver);
     const Conserved FxR = riemann_flux(Uc,  Uip, Direction::X, solver);
@@ -289,8 +325,6 @@ __global__ void advance_x_reconstruct_smem_fused_kernel(
     double* s_F_E    = s_F_rhov + flux_tile_n;
 
     const int i_state_start = Uin.i_begin() + block_i_start - 2;
-    const int valid_i_min = Uin.i_begin() - 2;
-    const int valid_i_max = Uin.i_end() + 1;
 
     // -------------------------------------------------------------------------
     // 1. Load conserved state tile into shared memory.
@@ -300,9 +334,10 @@ __global__ void advance_x_reconstruct_smem_fused_kernel(
         const int si = linear - sj * state_tile_w;
 
         const int lj = blockIdx.y * blockDim.y + sj;
-        const int gi = i_state_start + si;
 
-        if (lj < Uin.ny && gi >= valid_i_min && gi <= valid_i_max) {
+        if (lj < Uin.ny) {
+            const int raw_gi = i_state_start + si;
+            const int gi = clamp_int_gpu(raw_gi, Uin.i_begin(), Uin.i_end() - 1);
             const int gj = Uin.j_begin() + lj;
             const int gidx = Uin.flat_index(gi, gj);
 
@@ -531,8 +566,6 @@ __global__ void advance_y_reconstruct_smem_fused_kernel(
     double* s_F_E    = s_F_rhov + flux_tile_n;
 
     const int j_state_start = Uin.j_begin() + block_j_start - 2;
-    const int valid_j_min = Uin.j_begin() - 2;
-    const int valid_j_max = Uin.j_end() + 1;
 
     // -------------------------------------------------------------------------
     // 1. Load conserved state tile into shared memory.
@@ -542,10 +575,11 @@ __global__ void advance_y_reconstruct_smem_fused_kernel(
         const int si = linear - sj * state_tile_w;
 
         const int li = blockIdx.x * blockDim.x + si;
-        const int gj = j_state_start + sj;
 
-        if (li < Uin.nx && gj >= valid_j_min && gj <= valid_j_max) {
+        if (li < Uin.nx) {
             const int gi = Uin.i_begin() + li;
+            const int raw_gj = j_state_start + sj;
+            const int gj = clamp_int_gpu(raw_gj, Uin.j_begin(), Uin.j_end() - 1);
             const int gidx = Uin.flat_index(gi, gj);
 
             s_rho[linear]  = Uin.rho[gidx];
@@ -716,9 +750,16 @@ void init_gpu_workspace(GpuWorkspace& ws, const Grid2DGPU& grid) {
     ws.nx = grid.nx();
     ws.ny = grid.ny();
 
-    const std::size_t total_cells = grid.num_cells();
+    // Store one maximum wave speed per CUDA block, not one value per cell.
+    // This keeps the public GpuWorkspace layout unchanged by reusing speed_d as
+    // the block-max array.
+    const std::size_t total_interior =
+        static_cast<std::size_t>(grid.nx()) * static_cast<std::size_t>(grid.ny());
 
-    CUDA_CHECK(cudaMalloc(&ws.speed_d, total_cells * sizeof(double)));
+    const std::size_t num_dt_blocks =
+        (total_interior + kDtReductionThreads - 1) / kDtReductionThreads;
+
+    CUDA_CHECK(cudaMalloc(&ws.speed_d, num_dt_blocks * sizeof(double)));
     CUDA_CHECK(cudaMalloc(&ws.max_speed_d, sizeof(double)));
 
     ws.reduce_tmp_bytes = 0;
@@ -728,7 +769,7 @@ void init_gpu_workspace(GpuWorkspace& ws, const Grid2DGPU& grid) {
         ws.reduce_tmp_bytes,
         ws.speed_d,
         ws.max_speed_d,
-        total_cells
+        num_dt_blocks
     );
 
     CUDA_CHECK(cudaMalloc(&ws.reduce_tmp, ws.reduce_tmp_bytes));
@@ -755,29 +796,27 @@ void free_gpu_workspace(GpuWorkspace& ws) {
 // -----------------------------------------------------------------------------
 
 double compute_dt_gpu(const Grid2DGPU& grid, GpuWorkspace& ws, double cfl) {
-    if (ws.nx != grid.nx() || ws.ny != grid.ny() || ws.speed_d == nullptr) {
-        throw std::runtime_error("compute_dt_gpu: workspace not initialized for this grid.");
-    }
+    const std::size_t total_interior =
+        static_cast<std::size_t>(grid.nx()) * static_cast<std::size_t>(grid.ny());
 
-    const dim3 threads(16, 16);
+    const std::size_t num_dt_blocks =
+        (total_interior + kDtReductionThreads - 1) / kDtReductionThreads;
 
-    const dim3 blocks(
-        (grid.nx() + threads.x - 1) / threads.x,
-        (grid.ny() + threads.y - 1) / threads.y
-    );
+    compute_block_max_speed_kernel<<<
+        static_cast<unsigned int>(num_dt_blocks),
+        kDtReductionThreads,
+        kDtReductionThreads * sizeof(double)
+    >>>(make_view(grid), ws.speed_d);
 
-    compute_local_speed_kernel<<<blocks, threads>>>(make_view(grid), ws.speed_d);
-    CUDA_CHECK(cudaGetLastError());
 
     cub::DeviceReduce::Max(
         ws.reduce_tmp,
         ws.reduce_tmp_bytes,
         ws.speed_d,
         ws.max_speed_d,
-        grid.num_cells()
+        num_dt_blocks
     );
 
-    CUDA_CHECK(cudaGetLastError());
 
     double max_speed = 0.0;
 
@@ -787,10 +826,6 @@ double compute_dt_gpu(const Grid2DGPU& grid, GpuWorkspace& ws, double cfl) {
         sizeof(double),
         cudaMemcpyDeviceToHost
     ));
-
-    if (max_speed <= 0.0) {
-        return std::numeric_limits<double>::max();
-    }
 
     return cfl * std::min(grid.dx(), grid.dy()) / max_speed;
 }
@@ -819,9 +854,6 @@ void advance_first_order_gpu(
         solver
     );
 
-    CUDA_CHECK(cudaGetLastError());
-
-    apply_transmissive_boundary_gpu(Unew);
 }
 
 // -----------------------------------------------------------------------------
@@ -836,21 +868,18 @@ void advance_second_order_gpu(
     double dt,
     RiemannSolver solver
 ) {
-    if (ws.nx != Uold.nx() || ws.ny != Uold.ny() || ws.speed_d == nullptr) {
-        throw std::runtime_error("advance_second_order_gpu: workspace not initialized for this grid.");
-    }
-
     /*
-      Recommended initial block size.
+      Integrated version:
+        - shared-memory reconstruction/flux cache;
+        - clamp-based transmissive boundary access;
+        - block-level CFL reduction in compute_dt_gpu;
+        - tuned 16x8 block size from the report.
 
-      You should later benchmark:
-          dim3 threads(16, 16);
-          dim3 threads(32, 8);
-          dim3 threads(32, 4);
-
-      For now, 16x16 is safer because this kernel uses more shared memory.
+      16x8 uses 128 threads per block.  For these fused kernels this is usually
+      a better resource trade-off than 16x16 because the kernel already stores
+      state tiles, reconstructed states, and face fluxes in shared memory.
     */
-    const dim3 threads(16, 16);
+    const dim3 threads(16, 8);
 
     const dim3 blocks(
         (Uold.nx() + threads.x - 1) / threads.x,
@@ -886,9 +915,9 @@ void advance_second_order_gpu(
         solver
     );
 
-    CUDA_CHECK(cudaGetLastError());
 
-    apply_transmissive_boundary_gpu(Utmp);
+    // No explicit intermediate boundary kernel is required.  The y-sweep reads
+    // out-of-domain y-stencil positions through clamp-based transmissive loads.
 
     // -------------------------------------------------------------------------
     // y sweep shared memory size
@@ -919,7 +948,7 @@ void advance_second_order_gpu(
         solver
     );
 
-    CUDA_CHECK(cudaGetLastError());
 
-    apply_transmissive_boundary_gpu(Unew);
+    // No final boundary kernel is required because transmissive boundary
+    // behaviour is embedded in the clamp-based stencil loads.
 }

@@ -16,19 +16,19 @@ final_time                : 0.001174
 total_steps               : 6539
 snapshots_written         : 5
 
-output_dir_time           : 0.000027 s
-config_and_init_time      : 0.003989 s
+output_dir_time           : 0.000017 s
+config_and_init_time      : 0.004075 s
 workspace_alloc_time      : 0.000007 s
 snapshot_schedule_time    : 0.000000 s
-main_loop_time            : 16.268853 s
-  boundary_time           : 0.008891 s
-  compute_dt_time         : 0.356138 s
-  advance_time            : 14.943046 s
-  snapshot_write_time     : 0.960170 s
-total_program_time        : 16.272904 s
+main_loop_time            : 17.597885 s
+  boundary_time           : 0.008982 s
+  compute_dt_time         : 0.356789 s
+  advance_time            : 14.770338 s
+  snapshot_write_time     : 2.461122 s
+total_program_time        : 17.602014 s
 
-avg_time_per_step         : 0.002488 s
+avg_time_per_step         : 0.002691 s
 avg_boundary_per_step     : 0.000001 s
-avg_compute_dt_per_step   : 0.000054 s
-avg_advance_per_step      : 0.002285 s
-other_loop_time           : 0.000607 s
+avg_compute_dt_per_step   : 0.000055 s
+avg_advance_per_step      : 0.002259 s
+other_loop_time           : 0.000654 s

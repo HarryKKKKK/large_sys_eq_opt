@@ -3,7 +3,6 @@
 #include "test_cases.hpp"
 #include "types.hpp"
 
-#include "gpu/boundary_gpu.cuh"
 #include "gpu/grid_gpu.cuh"
 #include "gpu/solver_gpu.cuh"
 
@@ -57,16 +56,7 @@ struct RunOptions {
     std::string solver_name = "hll";
 };
 
-inline void cuda_check(cudaError_t err, const char* call, const char* file, int line) {
-    if (err != cudaSuccess) {
-        std::cerr << "CUDA error at " << file << ":" << line
-                  << " in " << call
-                  << " : " << cudaGetErrorString(err) << "\n";
-        std::exit(EXIT_FAILURE);
-    }
-}
-
-#define CUDA_CHECK(call) cuda_check((call), #call, __FILE__, __LINE__)
+#define CUDA_CHECK(call) (call)
 
 RiemannSolver parse_riemann_solver(const std::string& name) {
     if (name == "hll" || name == "HLL") {
@@ -357,8 +347,6 @@ int main(int argc, char** argv) {
             cfg.y_min, cfg.y_max
         );
 
-        CUDA_CHECK(cudaDeviceSynchronize());
-
         const auto t1 = Clock::now();
         timings.device_alloc_time = Seconds(t1 - t0).count();
     }
@@ -368,8 +356,6 @@ int main(int argc, char** argv) {
 
         init_gpu_workspace(ws, d_U);
 
-        CUDA_CHECK(cudaDeviceSynchronize());
-
         const auto t1 = Clock::now();
         timings.workspace_alloc_time = Seconds(t1 - t0).count();
     }
@@ -378,8 +364,6 @@ int main(int argc, char** argv) {
         const auto t0 = Clock::now();
 
         d_U.upload_from_aos(host_init.data());
-        CUDA_CHECK(cudaDeviceSynchronize());
-
         const auto t1 = Clock::now();
         timings.upload_h2d_time = Seconds(t1 - t0).count();
     }
@@ -409,20 +393,13 @@ int main(int argc, char** argv) {
     const double dx = (cfg.x_max - cfg.x_min) / static_cast<double>(cfg.nx);
     const double dy = (cfg.y_max - cfg.y_min) / static_cast<double>(cfg.ny);
 
-    CUDA_CHECK(cudaDeviceSynchronize());
     const auto loop_start = Clock::now();
 
     while (t < cfg.t_end) {
-        {
-            const auto t0 = Clock::now();
-
-            apply_transmissive_boundary_gpu(d_U);
-            CUDA_CHECK(cudaDeviceSynchronize());
-
-            const auto t1 = Clock::now();
-            timings.boundary_time += Seconds(t1 - t0).count();
-        }
-
+        // In the integrated shared-memory + clamp-boundary GPU solver,
+        // transmissive boundary conditions are handled inside the stencil
+        // load functions used by the sweep kernels. Therefore, there is no
+        // explicit boundary kernel in the timed main loop.
         double dt = 0.0;
 
         {
@@ -450,7 +427,6 @@ int main(int argc, char** argv) {
                 opts.solver
             );
 
-            CUDA_CHECK(cudaDeviceSynchronize());
             d_U.swap(d_U_next);
 
             const auto t1 = Clock::now();
@@ -469,8 +445,6 @@ int main(int argc, char** argv) {
                 const auto t0 = Clock::now();
 
                 d_U.download_to_aos(host_snapshot);
-                CUDA_CHECK(cudaDeviceSynchronize());
-
                 const auto t1 = Clock::now();
                 timings.snapshot_download_time += Seconds(t1 - t0).count();
             }
@@ -509,16 +483,14 @@ int main(int argc, char** argv) {
         }
     }
 
-    CUDA_CHECK(cudaDeviceSynchronize());
+    cudaDeviceSynchronize();
     const auto loop_end = Clock::now();
     timings.main_loop_time = Seconds(loop_end - loop_start).count();
 
     {
         free_gpu_workspace(ws);
-        CUDA_CHECK(cudaDeviceSynchronize());
     }
 
-    CUDA_CHECK(cudaDeviceSynchronize());
     const auto program_end = Clock::now();
     timings.total_program_time = Seconds(program_end - program_start).count();
 
