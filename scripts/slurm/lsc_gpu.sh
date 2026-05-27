@@ -17,6 +17,10 @@ SLURM_SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$(pwd)}"
 WORKDIR="${WORKDIR:-${SLURM_SUBMIT_DIR}}"
 cd "$WORKDIR"
 
+# 提取 Git 信息，方便后续溯源
+GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+
 mkdir -p logs validation scaling outputs
 
 # Override like:
@@ -24,7 +28,6 @@ mkdir -p logs validation scaling outputs
 read -r -a SCALES <<< "${SCALES_STR:-1 2 4 8}"
 read -r -a CASES  <<< "${CASES_STR:-shock_bubble}"
 read -r -a SOLVERS <<< "${SOLVERS_STR:-hll}"
-
 
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export OMP_PROC_BIND=close
@@ -35,6 +38,8 @@ echo "JobID               : ${SLURM_JOB_ID}"
 echo "Host                : $(hostname)"
 echo "Start               : $(date)"
 echo "Workdir             : ${WORKDIR}"
+echo "Git Branch          : ${GIT_BRANCH}"
+echo "Git Commit          : ${GIT_COMMIT}"
 echo "Partition           : ${SLURM_JOB_PARTITION:-unknown}"
 echo "SLURM_NTASKS        : ${SLURM_NTASKS:-unset}"
 echo "SLURM_CPUS_PER_TASK : ${SLURM_CPUS_PER_TASK:-unset}"
@@ -59,34 +64,47 @@ make clean
 make gpu
 
 SUMMARY="validation/gpu_clean_external_timing_${SLURM_JOB_ID}.csv"
-echo "arch,case,solver,n,nx,ny,total_cells,total_steps,real_seconds,user_seconds,sys_seconds,max_rss_kb,run_log,time_log" > "$SUMMARY"
+echo "arch,case,solver,n,nx,ny,total_cells,total_steps,real_seconds,user_seconds,sys_seconds,max_rss_kb,git_branch,git_commit" > "$SUMMARY"
 
 run_and_record() {
     local case_name="$1"
     local solver_name="$2"
     local n_scale="$3"
 
-    local run_log="logs/gpu_${case_name}_${solver_name}_n${n_scale}_${SLURM_JOB_ID}.log"
-    local time_log="logs/gpu_${case_name}_${solver_name}_n${n_scale}_${SLURM_JOB_ID}.time"
-
     echo ""
     echo "===== GPU RUN: case=${case_name}, solver=${solver_name}, n=${n_scale} ====="
 
+    # 创建隐藏的临时文件（存储在系统的 /tmp 目录下），运行完即焚
+    local temp_log=$(mktemp)
+    local temp_time=$(mktemp)
+
+    # 用 tee 保证 main_gpu 的输出能实时显示在 SLURM 的 out 文件里，同时存入临时文件供 awk 解析
     /usr/bin/time -f "real_seconds=%e\nuser_seconds=%U\nsys_seconds=%S\nmax_rss_kb=%M" \
-        -o "$time_log" \
-        ./main_gpu "$n_scale" --case "$case_name" --solver "$solver_name" 2>&1 | tee "$run_log"
+        -o "$temp_time" \
+        ./main_gpu "$n_scale" --case "$case_name" --solver "$solver_name" 2>&1 | tee "$temp_log"
 
+    # 从临时文件中提取数据
     local nx ny cells steps real user sys rss
-    nx=$(awk -F ':' '/\[GPU\] nx/{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit}' "$run_log")
-    ny=$(awk -F ':' '/\[GPU\] ny/{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit}' "$run_log")
-    cells=$(awk -F ':' '/\[GPU\] total_cells/{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit}' "$run_log")
-    steps=$(awk -F '=' '/\[GPU\] Total steps/{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit}' "$run_log")
-    real=$(awk -F '=' '/real_seconds/{print $2; exit}' "$time_log")
-    user=$(awk -F '=' '/user_seconds/{print $2; exit}' "$time_log")
-    sys=$(awk -F '=' '/sys_seconds/{print $2; exit}' "$time_log")
-    rss=$(awk -F '=' '/max_rss_kb/{print $2; exit}' "$time_log")
+    nx=$(awk -F ':' '/\[GPU\] nx/{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit}' "$temp_log")
+    ny=$(awk -F ':' '/\[GPU\] ny/{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit}' "$temp_log")
+    cells=$(awk -F ':' '/\[GPU\] total_cells/{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit}' "$temp_log")
+    steps=$(awk -F '=' '/\[GPU\] Total steps/{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit}' "$temp_log")
+    
+    real=$(awk -F '=' '/real_seconds/{print $2; exit}' "$temp_time")
+    user=$(awk -F '=' '/user_seconds/{print $2; exit}' "$temp_time")
+    sys=$(awk -F '=' '/sys_seconds/{print $2; exit}' "$temp_time")
+    rss=$(awk -F '=' '/max_rss_kb/{print $2; exit}' "$temp_time")
 
-    echo "gpu,${case_name},${solver_name},${n_scale},${nx},${ny},${cells},${steps},${real},${user},${sys},${rss},${run_log},${time_log}" >> "$SUMMARY"
+    # 每次运行结束后，立刻把提取出来的 Timing 打印到主 log 里
+    echo "------------------------------------------------------------"
+    echo "[TIMING RECORDED] Real: ${real}s | User: ${user}s | Sys: ${sys}s | Max RSS: ${rss} KB"
+    echo "------------------------------------------------------------"
+
+    # 追加到 CSV
+    echo "gpu,${case_name},${solver_name},${n_scale},${nx},${ny},${cells},${steps},${real},${user},${sys},${rss},${GIT_BRANCH},${GIT_COMMIT}" >> "$SUMMARY"
+
+    # 清理临时文件，你的文件夹依然干干净净
+    rm -f "$temp_log" "$temp_time"
 }
 
 for N in "${SCALES[@]}"; do
