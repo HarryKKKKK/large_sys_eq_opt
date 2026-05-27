@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH -J sys_eq_gpu_clean
+#SBATCH -J sys_eq_gpu_clean_fused_kernel_compute_dt
 #SBATCH -A hk597
 #SBATCH -p csc-mphil-gpu
 #SBATCH -N 1
