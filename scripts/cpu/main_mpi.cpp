@@ -7,7 +7,6 @@
 
 #include <mpi.h>
 
-#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -35,15 +34,12 @@ RiemannSolver parse_riemann_solver(const std::string& name) {
     if (name == "hll" || name == "HLL") {
         return RiemannSolver::HLL;
     }
-
     if (name == "hllc" || name == "HLLC") {
         return RiemannSolver::HLLC;
     }
-
     if (name == "exact" || name == "Exact" || name == "EXACT") {
         return RiemannSolver::Exact;
     }
-
     if (name == "force" || name == "Force" || name == "FORCE") {
         return RiemannSolver::FORCE;
     }
@@ -82,29 +78,26 @@ RunOptions parse_run_options(int argc, char** argv) {
         if (arg == "--output") {
             opts.write_output = true;
             opts.num_snapshots = 5;
-        } else if (arg == "--no-output") {
-            opts.write_output = false;
-            opts.num_snapshots = 0;
         } else if (arg == "--timing-only") {
-            // Kept for compatibility with old scripts.
-            // In this clean version, it simply disables snapshot output.
+            // Kept only for compatibility with old scripts. This clean version
+            // does not produce timing reports.
             opts.write_output = false;
             opts.num_snapshots = 0;
         } else if (arg == "--case") {
             if (i + 1 >= argc) {
                 throw std::runtime_error("--case requires a value, e.g. shock_bubble or blast_wave.");
             }
-
             opts.case_name = argv[++i];
             (void)parse_case_id(opts.case_name);
         } else if (arg == "--solver") {
             if (i + 1 >= argc) {
                 throw std::runtime_error("--solver requires a value: hll, hllc, exact, or force.");
             }
-
             opts.solver_name = argv[++i];
             opts.solver = parse_riemann_solver(opts.solver_name);
             opts.solver_name = riemann_solver_to_string(opts.solver);
+        } else if (arg[0] == '-') {
+            throw std::runtime_error("Unknown argument: " + arg);
         }
     }
 
@@ -113,6 +106,12 @@ RunOptions parse_run_options(int argc, char** argv) {
     }
 
     return opts;
+}
+
+CaseConfig scale_case_config(CaseConfig cfg, int scale) {
+    cfg.nx *= scale;
+    cfg.ny *= scale;
+    return cfg;
 }
 
 void ensure_output_dir() {
@@ -137,26 +136,24 @@ std::string make_snapshot_name(
     return oss.str();
 }
 
-void write_grid_csv(const Grid2D& grid, const CaseConfig& cfg, const std::string& filename) {
+void write_local_grid_csv(
+    const Grid2D& grid,
+    const MpiDecomp2D& mp,
+    const std::string& filename
+) {
     std::ofstream out(filename);
     out << "i,j,x,y,rho,rhou,rhov,E\n";
 
     for (int j = grid.j_begin(); j < grid.j_end(); ++j) {
+        const int global_j = mp.ng + mp.y0_global + (j - grid.j_begin());
+
         for (int i = grid.i_begin(); i < grid.i_end(); ++i) {
             const Conserved& U = grid(i, j);
 
-            const double x = cfg.x_min +
-                (static_cast<double>(i - cfg.ng) + 0.5) *
-                ((cfg.x_max - cfg.x_min) / static_cast<double>(cfg.nx));
-
-            const double y = cfg.y_min +
-                (static_cast<double>(j - cfg.ng) + 0.5) *
-                ((cfg.y_max - cfg.y_min) / static_cast<double>(cfg.ny));
-
             out << i << ","
-                << j << ","
-                << x << ","
-                << y << ","
+                << global_j << ","
+                << grid.x_center(i) << ","
+                << grid.y_center(j) << ","
                 << U.rho << ","
                 << U.rhou << ","
                 << U.rhov << ","
@@ -179,37 +176,52 @@ int main(int argc, char** argv) {
         const RunOptions opts = parse_run_options(argc, argv);
 
         if (opts.write_output) {
-            ensure_output_dir();
+            if (rank == 0) {
+                ensure_output_dir();
+            }
+            MPI_Barrier(MPI_COMM_WORLD);
         }
 
-        CaseConfig cfg = get_n_case_config(opts.case_name, opts.resolution_scale);
-        Grid2D U = make_n_grid(opts.case_name, opts.resolution_scale);
+        CaseConfig cfg = scale_case_config(
+            get_case_config(opts.case_name),
+            opts.resolution_scale
+        );
 
+        MpiDecomp2D mp = make_y_slab_decomp(cfg, MPI_COMM_WORLD);
+
+        Grid2D U = make_local_mpi_grid(opts.case_name, cfg, mp);
         Grid2D U_mid(
-            cfg.nx, cfg.ny, cfg.ng,
-            cfg.x_min, cfg.x_max,
-            cfg.y_min, cfg.y_max
+            cfg.nx,
+            mp.ny_local,
+            cfg.ng,
+            cfg.x_min,
+            cfg.x_max,
+            U.y_min(),
+            U.y_max()
         );
-
         Grid2D U_next(
-            cfg.nx, cfg.ny, cfg.ng,
-            cfg.x_min, cfg.x_max,
-            cfg.y_min, cfg.y_max
+            cfg.nx,
+            mp.ny_local,
+            cfg.ng,
+            cfg.x_min,
+            cfg.x_max,
+            U.y_min(),
+            U.y_max()
         );
 
-        CpuWorkspace cpu_ws;
-        cpu_ws.init(cfg.nx, cfg.ny);
+        MpiCpuWorkspace ws;
+        ws.init(U.nx(), U.ny());
 
         if (rank == 0) {
             std::cout << "[MPI] case_name          : " << opts.case_name << "\n";
             std::cout << "[MPI] riemann_solver     : " << opts.solver_name << "\n";
             std::cout << "[MPI] resolution_scale   : " << opts.resolution_scale << "\n";
+            std::cout << "[MPI] mpi_ranks          : " << size << "\n";
             std::cout << "[MPI] nx                 : " << cfg.nx << "\n";
             std::cout << "[MPI] ny                 : " << cfg.ny << "\n";
             std::cout << "[MPI] total_cells        : "
                       << static_cast<long long>(cfg.nx) * static_cast<long long>(cfg.ny)
                       << "\n";
-            std::cout << "[MPI] ranks              : " << size << "\n";
             std::cout << "[MPI] write_output       : "
                       << (opts.write_output ? "true" : "false") << "\n";
             std::cout << "[MPI] num_snapshots      : "
@@ -233,22 +245,23 @@ int main(int argc, char** argv) {
             }
         }
 
-        while (t < cfg.t_end) {
-            apply_transmissive_boundary(U);
+        MPI_Barrier(MPI_COMM_WORLD);
 
-            double dt = compute_dt(U, cfg.cfl);
+        while (t < cfg.t_end) {
+            double dt = compute_dt_mpi(U, mp, cfg.cfl);
 
             if (t + dt > cfg.t_end) {
                 dt = cfg.t_end - t;
             }
 
-            advance_second_order(
+            advance_second_order_mpi(
                 U,
                 U_mid,
                 U_next,
+                mp,
                 dt,
-                cpu_ws,
-                opts.solver
+                opts.solver,
+                ws
             );
 
             std::swap(U, U_next);
@@ -267,24 +280,34 @@ int main(int argc, char** argv) {
                     next_snapshot + 1
                 );
 
-                write_grid_csv(U, cfg, filename);
-
-                if (rank == 0) {
-                    std::cout << "[MPI] Wrote snapshot " << (next_snapshot + 1)
-                              << " at t = " << t << "\n";
-                }
-
+                write_local_grid_csv(U, mp, filename);
                 ++next_snapshot;
             }
         }
 
+        MPI_Barrier(MPI_COMM_WORLD);
+
+        int global_steps = 0;
+        MPI_Reduce(
+            &step,
+            &global_steps,
+            1,
+            MPI_INT,
+            MPI_MAX,
+            0,
+            MPI_COMM_WORLD
+        );
+
         if (rank == 0) {
             std::cout << "[MPI] Finished.\n";
             std::cout << "[MPI] Final time = " << t << "\n";
-            std::cout << "[MPI] Total steps = " << step << "\n";
+            std::cout << "[MPI] Total steps = " << global_steps << "\n";
+            if (!opts.write_output) {
+                std::cout << "[MPI] Output disabled. No files were written.\n";
+            }
         }
     } catch (const std::exception& e) {
-        std::cerr << "[MPI rank " << rank << "] ERROR: " << e.what() << "\n";
+        std::cerr << "[rank " << rank << "] ERROR: " << e.what() << "\n";
         MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
