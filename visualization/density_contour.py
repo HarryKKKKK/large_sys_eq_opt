@@ -5,10 +5,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-
-CPU_PATTERN = "cpu_snapshot_*.csv"
-GPU_PATTERN = "gpu_snapshot_*.csv"
-OUT_NAME = "cpu_gpu_density_contours.png"
+# 默认输出文件名可以通过参数覆盖
+DEFAULT_OUT_NAME = "cpu_gpu_density_contours_snapshot.png"
 
 DENSITY_LEVELS = np.linspace(0.1, 2.8, 45)
 
@@ -54,14 +52,19 @@ def match_snapshot_name(cpu_file, gpu_file):
     return cpu_name == gpu_name, cpu_name, gpu_name
 
 
-def get_input_dir():
+def get_args():
     parser = argparse.ArgumentParser(
-        description="Plot CPU and GPU density contours from snapshot CSV files."
+        description="Plot CPU and GPU density contours for a specific snapshot."
     )
     parser.add_argument(
         "input_dir",
         nargs="?",
-        help="Directory containing cpu_snapshot_*.csv and gpu_snapshot_*.csv"
+        help="Directory containing the snapshot CSV files"
+    )
+    parser.add_argument(
+        "--snapshot",
+        default="5",
+        help="The specific snapshot number to plot (default: 5)"
     )
     parser.add_argument(
         "--output",
@@ -80,19 +83,23 @@ def get_input_dir():
     if not os.path.isdir(input_dir):
         raise FileNotFoundError(f"Directory not found: {input_dir}")
 
-    return input_dir, args.output
+    return input_dir, args.snapshot, args.output
 
 
 def main():
-    input_dir, output_name = get_input_dir()
+    input_dir, target_snapshot, output_name = get_args()
 
-    cpu_files = sorted(glob.glob(os.path.join(input_dir, CPU_PATTERN)))
-    gpu_files = sorted(glob.glob(os.path.join(input_dir, GPU_PATTERN)))
+    # 动态生成匹配模式，例如匹配 "cpu_*_snapshot_5.csv"
+    cpu_pattern = f"cpu_*_snapshot_{target_snapshot}.csv"
+    gpu_pattern = f"gpu_*_snapshot_{target_snapshot}.csv"
+
+    cpu_files = sorted(glob.glob(os.path.join(input_dir, cpu_pattern)))
+    gpu_files = sorted(glob.glob(os.path.join(input_dir, gpu_pattern)))
 
     if not cpu_files:
-        raise FileNotFoundError(f"No files found: {os.path.join(input_dir, CPU_PATTERN)}")
+        raise FileNotFoundError(f"No CPU files found matching snapshot {target_snapshot} in {input_dir}")
     if not gpu_files:
-        raise FileNotFoundError(f"No files found: {os.path.join(input_dir, GPU_PATTERN)}")
+        raise FileNotFoundError(f"No GPU files found matching snapshot {target_snapshot} in {input_dir}")
 
     if len(cpu_files) != len(gpu_files):
         raise ValueError(
@@ -106,7 +113,7 @@ def main():
             raise ValueError(f"Snapshot name mismatch: {cpu_snap} vs {gpu_snap}")
         pairs.append((cpu_file, gpu_file, cpu_snap))
 
-    nrows = len(pairs)
+    nrows = len(pairs) # 这里通常只会是 1
     fig, axes = plt.subplots(nrows, 2, figsize=(10, 4 * nrows), squeeze=False)
 
     if DRAW_BUBBLE:
@@ -163,12 +170,14 @@ def main():
                 spine.set_linewidth(1.0)
                 spine.set_color("black")
 
-        print(f"[{row}] plotted {snap_name}")
+        print(f"Plotted {snap_name}")
 
     plt.tight_layout()
 
     if output_name is None:
-        output_path = os.path.join(input_dir, OUT_NAME)
+        # 如果没有指定输出名字，就自动在名字里加上 snapshot 的编号
+        final_out_name = DEFAULT_OUT_NAME.replace(".png", f"_{target_snapshot}.png")
+        output_path = os.path.join(input_dir, final_out_name)
     else:
         output_path = output_name if os.path.isabs(output_name) else os.path.join(input_dir, output_name)
 

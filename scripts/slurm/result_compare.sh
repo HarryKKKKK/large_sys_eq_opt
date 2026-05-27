@@ -1,34 +1,39 @@
 #!/bin/bash -l
-#SBATCH -A MPHIL-NIKIFORAKIS-HK597-SL2-GPU
-#SBATCH -p ampere
+#SBATCH -J sys_eq_fullnode_compare
+#SBATCH -A hk597
+#SBATCH -p csc-mphil-gpu
 #SBATCH -N 1
 #SBATCH --exclusive
-#SBATCH --gres=gpu:1
-#SBATCH -t 02:00:00
-#SBATCH -J sys_eq_clean_fullrank
-#SBATCH -o /rds/user/hk597/hpc-work/large_sys_eq_opt/logs/%x_%j.out
-#SBATCH -e /rds/user/hk597/hpc-work/large_sys_eq_opt/logs/%x_%j.err
+#SBATCH --gres=gpu:4
+#SBATCH --time=3:00:00
+#SBATCH --output=logs/%x_%j.out
+#SBATCH --error=logs/%x_%j.err
 
 # ============================================================
-# Clean Part 2 run script for CSD3
+# CPU OpenMP / GPU / pure MPI comparison, clean-main version
 #
-# Purpose:
-#   Run CPU OpenMP / GPU / pure MPI using clean main files with
-#   no internal timing code.
+# IMPORTANT FOR CSD3 CSC GPU PARTITION:
+#   CSD3 rejects: --exclusive + --gres=gpu:1
+#   Therefore, to get the whole GPU node, this script requests:
+#       --exclusive + --gres=gpu:4
 #
-# Timing method:
-#   Uses /usr/bin/time outside the program. This avoids modifying
-#   the solver/main code and has much lower impact than per-step
-#   internal timing.
+# This gives CPU OpenMP and MPI access to the full node CPU resources.
+# The GPU run still uses one executable instance; CUDA will usually choose
+# device 0 from CUDA_VISIBLE_DEVICES unless your code selects otherwise.
 #
-# Default allocation:
-#   CPU OpenMP : 1 process x all allocated CPU cores
-#   MPI        : one MPI rank per allocated CPU core
-#   GPU        : 1 GPU
+# Clean-main timing:
+#   The C++ programs do not need internal timers. This script measures
+#   external wall time using /usr/bin/time.
+#
+# Runs by default:
+#   scales  : N = 1, 2, 4, 8, 16
+#   cases   : shock_bubble, blast_wave
+#   solvers : hll, hllc, exact, force
+#   arch    : cpu_omp, gpu, mpi
 #
 # Optional overrides:
-#   MPI_RANKS=32 OMP_THREADS_CPU=32 sbatch result_compare_clean_fullrank.sh
-#   SCALES_STR="1 4 8 16" CASES_STR="shock_bubble" SOLVERS_STR="hll hllc" sbatch result_compare_clean_fullrank.sh
+#   SCALES_STR="1 2 4" CASES_STR="shock_bubble" SOLVERS_STR="hll hllc" sbatch this_script.sh
+#   MPI_RANKS=32 OMP_THREADS_CPU=32 sbatch this_script.sh
 # ============================================================
 
 set -euo pipefail
@@ -36,7 +41,7 @@ set -euo pipefail
 SLURM_JOB_ID="${SLURM_JOB_ID:-manual}"
 SLURM_SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$(pwd)}"
 
-WORKDIR="${SLURM_SUBMIT_DIR}"
+WORKDIR="${WORKDIR:-${SLURM_SUBMIT_DIR}}"
 cd "$WORKDIR"
 
 mkdir -p logs outputs scaling validation
@@ -44,12 +49,9 @@ mkdir -p logs outputs scaling validation
 # -------------------------
 # Benchmark matrix
 # -------------------------
-read -r -a SCALES  <<< "${SCALES_STR:-1 4 8 16}"
-read -r -a CASES   <<< "${CASES_STR:-shock_bubble}"
-read -r -a SOLVERS <<< "${SOLVERS_STR:-hll}"
-
-# For quick test:
-#   SCALES_STR="1" CASES_STR="shock_bubble" SOLVERS_STR="hll" sbatch result_compare_clean_fullrank.sh
+read -r -a SCALES <<< "${SCALES_STR:-1 2 4 8 16}"
+read -r -a CASES  <<< "${CASES_STR:-shock_bubble blast_wave}"
+read -r -a SOLVERS <<< "${SOLVERS_STR:-hll hllc exact force}"
 
 # -------------------------
 # Module setup
@@ -74,8 +76,10 @@ else
     echo "[WARN] module command is not available. Continuing with current environment."
 fi
 
+echo ""
+
 # -------------------------
-# Detect usable CPU cores
+# Detect full-node CPU resources
 # -------------------------
 detect_cpus_on_node() {
     if [ -n "${SLURM_CPUS_ON_NODE:-}" ]; then
@@ -93,6 +97,9 @@ detect_cpus_on_node() {
 
 CPUS_ON_NODE="$(detect_cpus_on_node)"
 
+# Full-node defaults:
+#   cpu_omp: one process using all CPU cores
+#   mpi: one MPI rank per CPU core
 MPI_RANKS="${MPI_RANKS:-${CPUS_ON_NODE}}"
 OMP_THREADS_CPU="${OMP_THREADS_CPU:-${CPUS_ON_NODE}}"
 OMP_THREADS_MPI="${OMP_THREADS_MPI:-1}"
@@ -100,43 +107,56 @@ OMP_THREADS_MPI="${OMP_THREADS_MPI:-1}"
 MPI_TOTAL_CPU_UNITS=$((MPI_RANKS * OMP_THREADS_MPI))
 
 if [ "${MPI_TOTAL_CPU_UNITS}" -gt "${CPUS_ON_NODE}" ]; then
-    echo "[ERROR] MPI_RANKS * OMP_THREADS_MPI = ${MPI_TOTAL_CPU_UNITS}, but detected only ${CPUS_ON_NODE} CPUs."
+    echo "[ERROR] MPI_RANKS * OMP_THREADS_MPI = ${MPI_TOTAL_CPU_UNITS}, but detected only ${CPUS_ON_NODE} CPUs on this node."
+    echo "[ERROR] Reduce MPI_RANKS or OMP_THREADS_MPI."
     exit 1
 fi
 
 if [ "${OMP_THREADS_CPU}" -gt "${CPUS_ON_NODE}" ]; then
-    echo "[ERROR] OMP_THREADS_CPU = ${OMP_THREADS_CPU}, but detected only ${CPUS_ON_NODE} CPUs."
+    echo "[ERROR] OMP_THREADS_CPU = ${OMP_THREADS_CPU}, but detected only ${CPUS_ON_NODE} CPUs on this node."
+    echo "[ERROR] Reduce OMP_THREADS_CPU."
     exit 1
 fi
 
 export OMP_PROC_BIND=close
 export OMP_PLACES=cores
 
-echo ""
+# -------------------------
+# Job info
+# -------------------------
 echo "===== JOB INFO ====="
-echo "JobID                : ${SLURM_JOB_ID}"
-echo "Host                 : $(hostname)"
-echo "Start                : $(date)"
-echo "Workdir              : ${WORKDIR}"
-echo "Partition            : ${SLURM_JOB_PARTITION:-unknown}"
-echo "Nodes                : ${SLURM_JOB_NUM_NODES:-1}"
-echo "SLURM_CPUS_ON_NODE   : ${SLURM_CPUS_ON_NODE:-unset}"
-echo "Detected CPUs/node   : ${CPUS_ON_NODE}"
-echo "CUDA_VISIBLE_DEVICES : ${CUDA_VISIBLE_DEVICES:-unset}"
-echo "SCALES               : ${SCALES[*]}"
-echo "CASES                : ${CASES[*]}"
-echo "SOLVERS              : ${SOLVERS[*]}"
-echo "MPI_RANKS            : ${MPI_RANKS}"
-echo "OMP_THREADS_CPU      : ${OMP_THREADS_CPU}"
-echo "OMP_THREADS_MPI      : ${OMP_THREADS_MPI}"
-echo "MPI total CPU units  : ${MPI_TOTAL_CPU_UNITS}"
+echo "JobID                 : ${SLURM_JOB_ID}"
+echo "Host                  : $(hostname)"
+echo "Start                 : $(date)"
+echo "Workdir               : ${WORKDIR}"
+echo "Partition             : ${SLURM_JOB_PARTITION:-unknown}"
+echo "Nodes                 : ${SLURM_JOB_NUM_NODES:-unknown}"
+echo "SLURM_NTASKS          : ${SLURM_NTASKS:-unset}"
+echo "SLURM_CPUS_PER_TASK   : ${SLURM_CPUS_PER_TASK:-unset}"
+echo "SLURM_CPUS_ON_NODE    : ${SLURM_CPUS_ON_NODE:-unset}"
+echo "SLURM_JOB_CPUS_PER_NODE: ${SLURM_JOB_CPUS_PER_NODE:-unset}"
+echo "Detected CPUs/node    : ${CPUS_ON_NODE}"
+echo "CUDA_VISIBLE_DEVICES  : ${CUDA_VISIBLE_DEVICES:-unset}"
+echo "SCALES                : ${SCALES[*]}"
+echo "CASES                 : ${CASES[*]}"
+echo "SOLVERS               : ${SOLVERS[*]}"
+echo "MPI_RANKS             : ${MPI_RANKS}"
+echo "OMP_THREADS_CPU       : ${OMP_THREADS_CPU}"
+echo "OMP_THREADS_MPI       : ${OMP_THREADS_MPI}"
+echo "MPI total CPU units   : ${MPI_TOTAL_CPU_UNITS}"
+echo "OMP_PROC_BIND         : ${OMP_PROC_BIND}"
+echo "OMP_PLACES            : ${OMP_PLACES}"
 echo ""
 
-echo "===== CPU/GPU TOPOLOGY ====="
+echo "===== CPU TOPOLOGY ====="
 lscpu | egrep 'CPU\(s\)|Thread\(s\) per core|Core\(s\) per socket|Socket\(s\)|NUMA node\(s\)' || true
-nvidia-smi -L || true
 echo ""
 
+echo "===== GPU INFO ====="
+nvidia-smi || true
+echo ""
+
+echo "===== COMPILER INFO ====="
 echo "which g++    : $(which g++ || true)"
 echo "which nvcc   : $(which nvcc || true)"
 echo "which mpicxx : $(which mpicxx || true)"
@@ -156,29 +176,6 @@ echo ""
 # -------------------------
 # Helpers
 # -------------------------
-run_with_time() {
-    local log_file="$1"
-    shift
-
-    /usr/bin/time \
-        -f "[TIME] real_seconds=%e\n[TIME] user_seconds=%U\n[TIME] sys_seconds=%S\n[TIME] max_rss_kb=%M" \
-        "$@" 2>&1 | tee "${log_file}"
-}
-
-run_mpi_with_time() {
-    local log_file="$1"
-    shift
-
-    /usr/bin/time \
-        -f "[TIME] real_seconds=%e\n[TIME] user_seconds=%U\n[TIME] sys_seconds=%S\n[TIME] max_rss_kb=%M" \
-        mpirun \
-            --host "$(hostname):${MPI_RANKS}" \
-            -np "${MPI_RANKS}" \
-            --map-by core \
-            --bind-to core \
-            "$@" 2>&1 | tee "${log_file}"
-}
-
 extract_value_colon() {
     local needle="$1"
     local log_file="$2"
@@ -206,17 +203,43 @@ extract_steps() {
     ' "$log_file"
 }
 
-extract_time_field() {
-    local field="$1"
-    local log_file="$2"
+read_time_value() {
+    local key="$1"
+    local time_file="$2"
 
-    awk -F '=' -v field="[TIME] ${field}" '
-        index($0, field) > 0 {
-            gsub(/^[ \t]+|[ \t]+$/, "", $2);
+    awk -F '=' -v key="$key" '
+        $1 == key {
             print $2;
             exit
         }
-    ' "$log_file"
+    ' "$time_file"
+}
+
+run_with_time() {
+    local time_file="$1"
+    shift
+
+    /usr/bin/time \
+        -f "real_seconds=%e\nuser_seconds=%U\nsys_seconds=%S\nmax_rss_kb=%M" \
+        -o "$time_file" \
+        "$@"
+}
+
+run_mpi_command() {
+    local time_file="$1"
+    shift
+
+    # Use mpirun inside the Slurm allocation. The explicit host slot count
+    # prevents OpenMPI from thinking the allocation has too few slots.
+    /usr/bin/time \
+        -f "real_seconds=%e\nuser_seconds=%U\nsys_seconds=%S\nmax_rss_kb=%M" \
+        -o "$time_file" \
+        mpirun \
+            --host "$(hostname):${MPI_RANKS}" \
+            -np "${MPI_RANKS}" \
+            --map-by core \
+            --bind-to core \
+            "$@"
 }
 
 append_summary_row() {
@@ -227,34 +250,38 @@ append_summary_row() {
     local solver_name="$5"
     local n_scale="$6"
     local ranks="$7"
-    local threads="$8"
-    local log_file="$9"
+    local threads_per_rank="$8"
+    local run_log="$9"
+    local time_log="${10}"
 
-    local nx ny cells steps real_s user_s sys_s rss_kb
+    local nx ny cells steps real user sys rss
 
-    nx=$(extract_value_colon "[${prefix}] nx" "$log_file")
-    ny=$(extract_value_colon "[${prefix}] ny" "$log_file")
-    cells=$(extract_value_colon "[${prefix}] total_cells" "$log_file")
-    steps=$(extract_steps "$prefix" "$log_file")
+    nx=$(extract_value_colon "[${prefix}] nx" "$run_log")
+    ny=$(extract_value_colon "[${prefix}] ny" "$run_log")
+    cells=$(extract_value_colon "[${prefix}] total_cells" "$run_log")
+    steps=$(extract_steps "$prefix" "$run_log")
 
-    real_s=$(extract_time_field "real_seconds" "$log_file")
-    user_s=$(extract_time_field "user_seconds" "$log_file")
-    sys_s=$(extract_time_field "sys_seconds" "$log_file")
-    rss_kb=$(extract_time_field "max_rss_kb" "$log_file")
+    real=$(read_time_value "real_seconds" "$time_log")
+    user=$(read_time_value "user_seconds" "$time_log")
+    sys=$(read_time_value "sys_seconds" "$time_log")
+    rss=$(read_time_value "max_rss_kb" "$time_log")
 
-    echo "${arch},${case_name},${solver_name},${n_scale},${ranks},${threads},${nx},${ny},${cells},${steps},${real_s},${user_s},${sys_s},${rss_kb},${log_file}" >> "$summary_file"
+    echo "${arch},${case_name},${solver_name},${n_scale},${ranks},${threads_per_rank},${nx},${ny},${cells},${steps},${real},${user},${sys},${rss},${run_log},${time_log}" >> "$summary_file"
 }
 
 write_summary_header() {
     local summary_file="$1"
-    echo "arch,case,solver,n,ranks,threads_per_rank,nx,ny,total_cells,total_steps,real_seconds,user_seconds,sys_seconds,max_rss_kb,log_file" > "$summary_file"
+    echo "arch,case,solver,n,ranks,threads_per_rank,nx,ny,total_cells,total_steps,real_seconds,user_seconds,sys_seconds,max_rss_kb,run_log,time_log" > "$summary_file"
 }
 
-SUMMARY_FILE="validation/cpu_gpu_mpi_clean_fullrank_${SLURM_JOB_ID}.csv"
-write_summary_header "$SUMMARY_FILE"
+SUMMARY="validation/cpu_gpu_mpi_fullnode_external_timing_${SLURM_JOB_ID}.csv"
+write_summary_header "$SUMMARY"
 
+# -------------------------
+# Runs
+# -------------------------
 echo ""
-echo "===== CLEAN CPU/GPU/MPI RUNS ACROSS SCALES ====="
+echo "===== CPU/GPU/MPI FULL-NODE EXTERNAL TIMING RUNS ====="
 
 for N in "${SCALES[@]}"; do
     echo ""
@@ -267,49 +294,55 @@ for N in "${SCALES[@]}"; do
 
             echo ""
             echo "===== CPU OMP RUN: case=${CASE}, solver=${SOLVER}, n=${N}, threads=${OMP_THREADS_CPU} ====="
-            CPU_LOG="logs/cpu_clean_${CASE}_${SOLVER}_n${N}_omp${OMP_THREADS_CPU}_${SLURM_JOB_ID}.log"
+            CPU_LOG="logs/cpu_${CASE}_${SOLVER}_n${N}_omp${OMP_THREADS_CPU}_${SLURM_JOB_ID}.log"
+            CPU_TIME="logs/cpu_${CASE}_${SOLVER}_n${N}_omp${OMP_THREADS_CPU}_${SLURM_JOB_ID}.time"
 
             export OMP_NUM_THREADS="${OMP_THREADS_CPU}"
-            run_with_time "$CPU_LOG" ./main_cpu "$N" --case "$CASE" --solver "$SOLVER"
-            append_summary_row "$SUMMARY_FILE" "cpu_omp" "CPU" "$CASE" "$SOLVER" "$N" 1 "$OMP_THREADS_CPU" "$CPU_LOG"
+            run_with_time "$CPU_TIME" ./main_cpu "$N" --case "$CASE" --solver "$SOLVER" 2>&1 | tee "$CPU_LOG"
+            append_summary_row "$SUMMARY" "cpu_omp" "CPU" "$CASE" "$SOLVER" "$N" 1 "$OMP_THREADS_CPU" "$CPU_LOG" "$CPU_TIME"
 
-            echo "Saved CPU log: $CPU_LOG"
+            echo "Saved CPU run log : $CPU_LOG"
+            echo "Saved CPU time log: $CPU_TIME"
 
             echo ""
             echo "===== GPU RUN: case=${CASE}, solver=${SOLVER}, n=${N} ====="
-            GPU_LOG="logs/gpu_clean_${CASE}_${SOLVER}_n${N}_${SLURM_JOB_ID}.log"
+            GPU_LOG="logs/gpu_${CASE}_${SOLVER}_n${N}_${SLURM_JOB_ID}.log"
+            GPU_TIME="logs/gpu_${CASE}_${SOLVER}_n${N}_${SLURM_JOB_ID}.time"
 
             export OMP_NUM_THREADS=1
-            run_with_time "$GPU_LOG" ./main_gpu "$N" --case "$CASE" --solver "$SOLVER"
-            append_summary_row "$SUMMARY_FILE" "gpu" "GPU" "$CASE" "$SOLVER" "$N" 1 1 "$GPU_LOG"
+            run_with_time "$GPU_TIME" ./main_gpu "$N" --case "$CASE" --solver "$SOLVER" 2>&1 | tee "$GPU_LOG"
+            append_summary_row "$SUMMARY" "gpu" "GPU" "$CASE" "$SOLVER" "$N" 1 1 "$GPU_LOG" "$GPU_TIME"
 
-            echo "Saved GPU log: $GPU_LOG"
+            echo "Saved GPU run log : $GPU_LOG"
+            echo "Saved GPU time log: $GPU_TIME"
 
             echo ""
             echo "===== MPI RUN: case=${CASE}, solver=${SOLVER}, n=${N}, ranks=${MPI_RANKS}, threads_per_rank=${OMP_THREADS_MPI} ====="
-            MPI_LOG="logs/mpi_clean_${CASE}_${SOLVER}_n${N}_r${MPI_RANKS}_t${OMP_THREADS_MPI}_${SLURM_JOB_ID}.log"
+            MPI_LOG="logs/mpi_${CASE}_${SOLVER}_n${N}_r${MPI_RANKS}_t${OMP_THREADS_MPI}_${SLURM_JOB_ID}.log"
+            MPI_TIME="logs/mpi_${CASE}_${SOLVER}_n${N}_r${MPI_RANKS}_t${OMP_THREADS_MPI}_${SLURM_JOB_ID}.time"
 
             export OMP_NUM_THREADS="${OMP_THREADS_MPI}"
-            run_mpi_with_time "$MPI_LOG" ./main_mpi "$N" --case "$CASE" --solver "$SOLVER"
-            append_summary_row "$SUMMARY_FILE" "mpi" "MPI" "$CASE" "$SOLVER" "$N" "$MPI_RANKS" "$OMP_THREADS_MPI" "$MPI_LOG"
+            run_mpi_command "$MPI_TIME" ./main_mpi "$N" --case "$CASE" --solver "$SOLVER" 2>&1 | tee "$MPI_LOG"
+            append_summary_row "$SUMMARY" "mpi" "MPI" "$CASE" "$SOLVER" "$N" "$MPI_RANKS" "$OMP_THREADS_MPI" "$MPI_LOG" "$MPI_TIME"
 
-            echo "Saved MPI log: $MPI_LOG"
+            echo "Saved MPI run log : $MPI_LOG"
+            echo "Saved MPI time log: $MPI_TIME"
 
             echo ""
             echo "Current summary tail:"
-            tail -n 6 "$SUMMARY_FILE" || true
+            tail -n 6 "$SUMMARY" || true
 
         done
     done
 done
 
 echo ""
-echo "===== CLEAN CPU/GPU/MPI SUMMARY ====="
-cat "$SUMMARY_FILE"
+echo "===== SUMMARY CSV ====="
+cat "$SUMMARY"
 
 echo ""
-echo "Summary file:"
-echo "$SUMMARY_FILE"
+echo "Timing summary saved to:"
+echo "$SUMMARY"
 
 echo ""
 echo "===== END ====="
