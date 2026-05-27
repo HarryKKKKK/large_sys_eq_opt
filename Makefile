@@ -1,5 +1,5 @@
-CXX   := g++
-NVCC  := nvcc
+CXX    := g++
+NVCC   := nvcc
 MPICXX := mpicxx
 
 # =========================
@@ -17,9 +17,17 @@ NVCCFLAGS_BASE += $(CUDA_ARCH)
 # =========================
 OMPFLAGS := -fopenmp
 
-CXXFLAGS    := $(CXXFLAGS_BASE) $(OMPFLAGS)
-NVCCFLAGS   := $(NVCCFLAGS_BASE)
-MPICXXFLAGS := $(MPICXXFLAGS_BASE) $(OMPFLAGS)
+# CPU OpenMP build
+CXXFLAGS := $(CXXFLAGS_BASE) $(OMPFLAGS)
+
+# GPU build
+NVCCFLAGS := $(NVCCFLAGS_BASE)
+
+# Pure MPI build: deliberately no OpenMP
+MPICXXFLAGS := $(MPICXXFLAGS_BASE)
+
+# Optional hybrid MPI + OpenMP build
+MPICXXFLAGS_OMP := $(MPICXXFLAGS_BASE) $(OMPFLAGS)
 
 # =========================
 # Directories / targets
@@ -28,20 +36,17 @@ BUILD_DIR := build
 CPU_BUILD_DIR := $(BUILD_DIR)/cpu
 GPU_BUILD_DIR := $(BUILD_DIR)/gpu
 MPI_BUILD_DIR := $(BUILD_DIR)/mpi
+MPI_OMP_BUILD_DIR := $(BUILD_DIR)/mpi_omp
 
 CPU_TARGET := main_cpu
 CPU_SERIAL_TARGET := main_cpu_serial
 GPU_TARGET := main_gpu
 MPI_TARGET := main_mpi
+MPI_OMP_TARGET := main_mpi_omp
 
 CPU_MAIN := scripts/cpu/main_cpu.cpp
 GPU_MAIN := scripts/gpu/main_gpu.cu
 MPI_MAIN := scripts/cpu/main_mpi.cpp
-
-COMMON_CPP := src/test_cases.cpp src/init.cpp
-CPU_CPP := src/cpu/solver_cpu.cpp
-MPI_CPP := src/cpu/solver_mpi.cpp
-GPU_CU := src/gpu/solver_gpu.cu src/gpu/boundary_gpu.cu
 
 CPU_OBJS := \
 	$(CPU_BUILD_DIR)/main_cpu.o \
@@ -62,15 +67,24 @@ GPU_OBJS := \
 	$(GPU_BUILD_DIR)/solver_gpu.o \
 	$(GPU_BUILD_DIR)/boundary_gpu.o
 
+# Pure MPI: do not link solver_cpu.o
 MPI_OBJS := \
 	$(MPI_BUILD_DIR)/main_mpi.o \
 	$(MPI_BUILD_DIR)/test_cases.o \
 	$(MPI_BUILD_DIR)/init.o \
-	$(MPI_BUILD_DIR)/solver_cpu.o \
 	$(MPI_BUILD_DIR)/solver_mpi.o
 
+# Optional hybrid target: still only links solver_mpi.o.
+# Use this only if solver_mpi.cpp itself contains OpenMP pragmas later.
+MPI_OMP_OBJS := \
+	$(MPI_OMP_BUILD_DIR)/main_mpi.o \
+	$(MPI_OMP_BUILD_DIR)/test_cases.o \
+	$(MPI_OMP_BUILD_DIR)/init.o \
+	$(MPI_OMP_BUILD_DIR)/solver_mpi.o
+
+# Safer default: do not build GPU unless explicitly requested
 .PHONY: all
-all: cpu gpu mpi
+all: cpu cpu_serial mpi
 
 # =========================
 # CPU with OpenMP
@@ -123,7 +137,7 @@ $(CPU_BUILD_DIR)/solver_cpu_serial.o: src/cpu/solver_cpu.cpp
 	$(CXX) $(CXXFLAGS_BASE) -c $< -o $@
 
 # =========================
-# CPU MPI / MPI + OpenMP
+# Pure MPI
 # =========================
 .PHONY: mpi
 mpi: $(MPI_TARGET)
@@ -143,13 +157,34 @@ $(MPI_BUILD_DIR)/init.o: src/init.cpp
 	@mkdir -p $(dir $@)
 	$(MPICXX) $(MPICXXFLAGS) -c $< -o $@
 
-$(MPI_BUILD_DIR)/solver_cpu.o: src/cpu/solver_cpu.cpp
-	@mkdir -p $(dir $@)
-	$(MPICXX) $(MPICXXFLAGS) -c $< -o $@
-
 $(MPI_BUILD_DIR)/solver_mpi.o: src/cpu/solver_mpi.cpp
 	@mkdir -p $(dir $@)
 	$(MPICXX) $(MPICXXFLAGS) -c $< -o $@
+
+# =========================
+# Optional MPI + OpenMP build
+# =========================
+.PHONY: mpi_omp
+mpi_omp: $(MPI_OMP_TARGET)
+
+$(MPI_OMP_TARGET): $(MPI_OMP_OBJS)
+	$(MPICXX) $(MPICXXFLAGS_OMP) $(MPI_OMP_OBJS) -o $@ -lstdc++fs
+
+$(MPI_OMP_BUILD_DIR)/main_mpi.o: $(MPI_MAIN)
+	@mkdir -p $(dir $@)
+	$(MPICXX) $(MPICXXFLAGS_OMP) -c $< -o $@
+
+$(MPI_OMP_BUILD_DIR)/test_cases.o: src/test_cases.cpp
+	@mkdir -p $(dir $@)
+	$(MPICXX) $(MPICXXFLAGS_OMP) -c $< -o $@
+
+$(MPI_OMP_BUILD_DIR)/init.o: src/init.cpp
+	@mkdir -p $(dir $@)
+	$(MPICXX) $(MPICXXFLAGS_OMP) -c $< -o $@
+
+$(MPI_OMP_BUILD_DIR)/solver_mpi.o: src/cpu/solver_mpi.cpp
+	@mkdir -p $(dir $@)
+	$(MPICXX) $(MPICXXFLAGS_OMP) -c $< -o $@
 
 # =========================
 # GPU
@@ -201,19 +236,19 @@ run_gpu: $(GPU_TARGET)
 
 .PHONY: run_mpi
 run_mpi: $(MPI_TARGET)
-	mpirun -np 4 ./$(MPI_TARGET) 1 --timing-only
+	OMP_NUM_THREADS=1 mpirun -np 4 ./$(MPI_TARGET) 1 --timing-only
 
 .PHONY: run_mpi_output
 run_mpi_output: $(MPI_TARGET)
-	mpirun -np 4 ./$(MPI_TARGET) 1 --output
+	OMP_NUM_THREADS=1 mpirun -np 4 ./$(MPI_TARGET) 1 --output
 
 .PHONY: run_mpi_omp
-run_mpi_omp: $(MPI_TARGET)
-	OMP_NUM_THREADS=4 OMP_PROC_BIND=true OMP_PLACES=cores mpirun -np 4 ./$(MPI_TARGET) 1 --timing-only
+run_mpi_omp: $(MPI_OMP_TARGET)
+	OMP_NUM_THREADS=4 OMP_PROC_BIND=true OMP_PLACES=cores mpirun -np 4 ./$(MPI_OMP_TARGET) 1 --timing-only
 
 # =========================
 # Clean
 # =========================
 .PHONY: clean
 clean:
-	rm -rf $(BUILD_DIR) $(CPU_TARGET) $(CPU_SERIAL_TARGET) $(GPU_TARGET) $(MPI_TARGET)
+	rm -rf $(BUILD_DIR) $(CPU_TARGET) $(CPU_SERIAL_TARGET) $(GPU_TARGET) $(MPI_TARGET) $(MPI_OMP_TARGET)

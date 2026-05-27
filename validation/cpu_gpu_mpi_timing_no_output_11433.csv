@@ -1,1 +1,2 @@
 arch,case,solver,n,nx,ny,total_cells,total_steps,main_loop_time,boundary_time,compute_dt_time,advance_time,total_program_time,avg_time_per_step,log_file
+mpi,shock_bubble,hll,1,500,197,98500,6359,450.723029,0.000000,356.288199,394.334325,450.827397,0.070880,logs/mpi_timing_shock_bubble_hll_n1_r8_t1_11433.log

@@ -1,0 +1,9 @@
+arch,case,solver,n,nx,ny,total_cells,total_steps,main_loop_time,boundary_time,compute_dt_time,advance_time,total_program_time,avg_time_per_step,log_file
+mpi,shock_bubble,hll,1,500,197,98500,6359,14.549189,0.000000,0.815275,14.024054,14.550494,0.002288,logs/mpi_timing_shock_bubble_hll_n1_r8_t1_11436.log
+mpi,shock_bubble,hllc,1,500,197,98500,6913,15.610895,0.000000,0.681853,15.193416,15.612074,0.002258,logs/mpi_timing_shock_bubble_hllc_n1_r8_t1_11436.log
+mpi,shock_bubble,exact,1,500,197,98500,6912,30.569624,0.000000,2.274125,30.055801,30.570967,0.004423,logs/mpi_timing_shock_bubble_exact_n1_r8_t1_11436.log
+mpi,shock_bubble,force,1,500,197,98500,6539,15.598518,0.000000,0.778437,15.165937,15.599860,0.002385,logs/mpi_timing_shock_bubble_force_n1_r8_t1_11436.log
+mpi,blast_wave,hll,1,500,500,250000,2306,14.124274,0.000000,1.158546,13.457723,14.126881,0.006125,logs/mpi_timing_blast_wave_hll_n1_r8_t1_11436.log
+mpi,blast_wave,hllc,1,500,500,250000,2335,13.074765,0.000000,0.814002,12.747211,13.077573,0.005599,logs/mpi_timing_blast_wave_hllc_n1_r8_t1_11436.log
+mpi,blast_wave,exact,1,500,500,250000,2334,25.849985,0.000000,1.741329,25.358154,25.852457,0.011075,logs/mpi_timing_blast_wave_exact_n1_r8_t1_11436.log
+mpi,blast_wave,force,1,500,500,250000,2308,15.403343,0.000000,1.333588,14.580684,15.406308,0.006674,logs/mpi_timing_blast_wave_force_n1_r8_t1_11436.log

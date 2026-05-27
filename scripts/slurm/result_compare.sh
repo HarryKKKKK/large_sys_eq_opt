@@ -268,30 +268,30 @@ echo "===== PART 2: CPU/GPU/MPI PURE TIMING RUNS ====="
 for CASE in "${CASES[@]}"; do
     for SOLVER in "${SOLVERS[@]}"; do
 
-        # # -----------------------------
-        # # CPU timing run
-        # # -----------------------------
-        # echo ""
-        # echo "===== CPU TIMING RUN: case=${CASE}, solver=${SOLVER}, n=${N} ====="
-        # CPU_LOG="logs/cpu_timing_${CASE}_${SOLVER}_n${N}_${SLURM_JOB_ID}.log"
+        # -----------------------------
+        # CPU timing run
+        # -----------------------------
+        echo ""
+        echo "===== CPU TIMING RUN: case=${CASE}, solver=${SOLVER}, n=${N} ====="
+        CPU_LOG="logs/cpu_timing_${CASE}_${SOLVER}_n${N}_${SLURM_JOB_ID}.log"
 
-        # export OMP_NUM_THREADS="${OMP_THREADS_CPU}"
-        # ./main_cpu "$N" --case "$CASE" --solver "$SOLVER" 2>&1 | tee "$CPU_LOG"
-        # append_summary_row "$TIMING_SUMMARY" "cpu" "CPU" "$CASE" "$SOLVER" "$N" "$CPU_LOG"
+        export OMP_NUM_THREADS="${OMP_THREADS_CPU}"
+        ./main_cpu "$N" --case "$CASE" --solver "$SOLVER" 2>&1 | tee "$CPU_LOG"
+        append_summary_row "$TIMING_SUMMARY" "cpu" "CPU" "$CASE" "$SOLVER" "$N" "$CPU_LOG"
 
-        # echo "Saved CPU timing log: $CPU_LOG"
+        echo "Saved CPU timing log: $CPU_LOG"
 
-        # # -----------------------------
-        # # GPU timing run
-        # # -----------------------------
-        # echo ""
-        # echo "===== GPU TIMING RUN: case=${CASE}, solver=${SOLVER}, n=${N} ====="
-        # GPU_LOG="logs/gpu_timing_${CASE}_${SOLVER}_n${N}_${SLURM_JOB_ID}.log"
+        # -----------------------------
+        # GPU timing run
+        # -----------------------------
+        echo ""
+        echo "===== GPU TIMING RUN: case=${CASE}, solver=${SOLVER}, n=${N} ====="
+        GPU_LOG="logs/gpu_timing_${CASE}_${SOLVER}_n${N}_${SLURM_JOB_ID}.log"
 
-        # ./main_gpu "$N" --case "$CASE" --solver "$SOLVER" 2>&1 | tee "$GPU_LOG"
-        # append_summary_row "$TIMING_SUMMARY" "gpu" "GPU" "$CASE" "$SOLVER" "$N" "$GPU_LOG"
+        ./main_gpu "$N" --case "$CASE" --solver "$SOLVER" 2>&1 | tee "$GPU_LOG"
+        append_summary_row "$TIMING_SUMMARY" "gpu" "GPU" "$CASE" "$SOLVER" "$N" "$GPU_LOG"
 
-        # echo "Saved GPU timing log: $GPU_LOG"
+        echo "Saved GPU timing log: $GPU_LOG"
 
         # -----------------------------
         # MPI timing run
