@@ -1,0 +1,6 @@
+arch,case,solver,n,nx,ny,total_cells,total_steps,main_loop_time,boundary_time,compute_dt_time,advance_time,total_program_time,avg_time_per_step,log_file
+cpu,shock_bubble,hll,1,500,197,98500,6359,15.461552,0.008699,0.351404,13.625526,15.465315,0.002431,logs/cpu_output_shock_bubble_hll_n1_11423.log
+gpu,shock_bubble,hll,1,500,197,98500,6359,2.635847,0.000000,1.162037,0.019272,2.848487,0.000415,logs/gpu_output_shock_bubble_hll_n1_11423.log
+mpi,shock_bubble,hll,1,,,,,,,,,,,logs/mpi_output_shock_bubble_hll_n1_r4_11423.log
+cpu,shock_bubble,hllc,1,500,197,98500,6913,16.247192,0.009466,0.355288,15.049131,16.251566,0.002350,logs/cpu_output_shock_bubble_hllc_n1_11423.log
+gpu,shock_bubble,hllc,1,500,197,98500,6913,2.108074,0.000000,1.319227,0.020965,2.320411,0.000305,logs/gpu_output_shock_bubble_hllc_n1_11423.log

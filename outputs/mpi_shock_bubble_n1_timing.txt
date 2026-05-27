@@ -1,0 +1,27 @@
+=== MPI CPU Timing Report ===
+case_name                 : shock_bubble
+resolution_scale          : 1
+mpi_ranks                 : 4
+nx_global                 : 500
+ny_global                 : 197
+ng                        : 2
+cfl                       : 0.400000
+t_end                     : 0.001174
+final_time                : 0.001174
+total_steps               : 6359
+snapshots_written         : 5
+
+output_dir_time           : 0.011599 s
+config_and_init_time      : 0.033998 s
+snapshot_schedule_time    : 0.000000 s
+main_loop_time            : 307.070998 s
+  boundary_time           : 70.407648 s
+  compute_dt_time         : 99.645738 s
+  advance_time            : 222.703828 s
+  snapshot_write_time     : 0.998070 s
+total_program_time        : 307.122597 s
+
+avg_time_per_step         : 0.048289 s
+avg_boundary_per_step     : 0.011072 s
+avg_compute_dt_per_step   : 0.015670 s
+avg_advance_per_step      : 0.035022 s

@@ -879,6 +879,7 @@ void advance_second_order_gpu(
       a better resource trade-off than 16x16 because the kernel already stores
       state tiles, reconstructed states, and face fluxes in shared memory.
     */
+    (void)ws;
     const dim3 threads(16, 8);
 
     const dim3 blocks(
