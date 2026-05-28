@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH -J sys_eq_cpu_mpi_full
+#SBATCH -J sys_eq_cpu_mpi_full_1
 #SBATCH -A hk597
 #SBATCH -p csc-mphil
 #SBATCH -N 1
@@ -143,15 +143,15 @@ for N in "${SCALES[@]}"; do
         for SOLVER in "${SOLVERS[@]}"; do
             echo ""
             echo "===== CPU OMP RUN: case=${CASE}, solver=${SOLVER}, n=${N}, threads=${OMP_THREADS_CPU} ====="
-            CPU_LOG="logs/cpu_${CASE}_${SOLVER}_n${N}_omp${OMP_THREADS_CPU}_${SLURM_JOB_ID}.log"
-            CPU_TIME="logs/cpu_${CASE}_${SOLVER}_n${N}_omp${OMP_THREADS_CPU}_${SLURM_JOB_ID}.time"
-            export OMP_NUM_THREADS="${OMP_THREADS_CPU}"
-            /usr/bin/time -f "real_seconds=%e\nuser_seconds=%U\nsys_seconds=%S\nmax_rss_kb=%M" \
-                -o "$CPU_TIME" \
-                ./main_cpu "$N" --case "$CASE" --solver "$SOLVER" 2>&1 | tee "$CPU_LOG"
-            echo "----- CPU TIME -----"
-            cat "$CPU_TIME"
-            append_row "cpu_omp" "$CASE" "$SOLVER" "$N" 1 "$OMP_THREADS_CPU" "CPU" "$CPU_LOG" "$CPU_TIME"
+            # CPU_LOG="logs/cpu_${CASE}_${SOLVER}_n${N}_omp${OMP_THREADS_CPU}_${SLURM_JOB_ID}.log"
+            # CPU_TIME="logs/cpu_${CASE}_${SOLVER}_n${N}_omp${OMP_THREADS_CPU}_${SLURM_JOB_ID}.time"
+            # export OMP_NUM_THREADS="${OMP_THREADS_CPU}"
+            # /usr/bin/time -f "real_seconds=%e\nuser_seconds=%U\nsys_seconds=%S\nmax_rss_kb=%M" \
+            #     -o "$CPU_TIME" \
+            #     ./main_cpu "$N" --case "$CASE" --solver "$SOLVER" 2>&1 | tee "$CPU_LOG"
+            # echo "----- CPU TIME -----"
+            # cat "$CPU_TIME"
+            # append_row "cpu_omp" "$CASE" "$SOLVER" "$N" 1 "$OMP_THREADS_CPU" "CPU" "$CPU_LOG" "$CPU_TIME"
 
             echo ""
             echo "===== MPI RUN: case=${CASE}, solver=${SOLVER}, n=${N}, ranks=${MPI_RANKS}, threads_per_rank=${OMP_THREADS_MPI} ====="

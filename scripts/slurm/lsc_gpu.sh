@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH -J sys_eq_gpu_clean_fused_kernel_compute_dt
+#SBATCH -J sys_eq_gpu_clean_fused_kernel_compute_dt_with_tiling
 #SBATCH -A hk597
 #SBATCH -p csc-mphil-gpu
 #SBATCH -N 1
@@ -26,8 +26,8 @@ mkdir -p logs validation scaling outputs
 # Override like:
 # SCALES_STR="1" CASES_STR="shock_bubble" SOLVERS_STR="hll" sbatch lsc_gpu_clean_compare.sh
 read -r -a SCALES <<< "${SCALES_STR:-1 2 4 8}"
-read -r -a CASES  <<< "${CASES_STR:-shock_bubble}"
-read -r -a SOLVERS <<< "${SOLVERS_STR:-hll}"
+read -r -a CASES  <<< "${CASES_STR:-shock_bubble blast_wave}"
+read -r -a SOLVERS <<< "${SOLVERS_STR:-hll hllc exact force}"
 
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export OMP_PROC_BIND=close

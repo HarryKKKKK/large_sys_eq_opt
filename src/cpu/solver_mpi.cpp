@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <vector>
 
+// MPI OPTIMIZED
 namespace {
 
 constexpr double kRhoFloor = 1.0e-12;
@@ -250,11 +251,13 @@ void fill_x_face_cache_mpi(
     const double dt_over_dx = dt / Uin.dx();
 
     for (int j = jb; j < je; ++j) {
+        const int local_j = j - jb;
+        const int cache_row = local_j * nx_faces;
+
         for (int i = ib - 1; i < ie; ++i) {
-            const int local_j = j - jb;
             const int local_i_face = i - (ib - 1);
 
-            ws.fx_cache[xface_idx(local_j, local_i_face, nx_faces)] =
+            ws.fx_cache[cache_row + local_i_face] =
                 muscl_hancock_flux_x(Uin, i, j, dt_over_dx, solver);
         }
     }
@@ -275,11 +278,13 @@ void fill_y_face_cache_mpi(
     const double dt_over_dy = dt / Uin.dy();
 
     for (int j = jb - 1; j < je; ++j) {
+        const int local_j_face = j - (jb - 1);
+        const int cache_row = local_j_face * nx_cells;
+
         for (int i = ib; i < ie; ++i) {
-            const int local_j_face = j - (jb - 1);
             const int local_i = i - ib;
 
-            ws.fy_cache[yface_idx(local_j_face, local_i, nx_cells)] =
+            ws.fy_cache[cache_row + local_i] =
                 muscl_hancock_flux_y(Uin, i, j, dt_over_dy, solver);
         }
     }
@@ -387,17 +392,31 @@ void exchange_halo_y(Grid2D& grid, const MpiDecomp2D& mp) {
     Conserved* send_up = data.data() + flat_index(grid, 0, grid.j_end() - ng);
     Conserved* recv_up = data.data() + flat_index(grid, 0, grid.j_end());
 
-    MPI_Sendrecv(
-        send_down, count, T, mp.nbr_down, 100,
+    // Pure MPI optimisation:
+    // Post both receives first, then both sends.  This avoids doing two strictly
+    // serial Sendrecv calls and lets the MPI implementation make progress on both
+    // halo directions at the same time.  MPI_PROC_NULL requests complete safely.
+    MPI_Request reqs[4];
+    int nreq = 0;
+
+    MPI_Irecv(
         recv_down, count, T, mp.nbr_down, 101,
-        mp.comm, MPI_STATUS_IGNORE
+        mp.comm, &reqs[nreq++]
+    );
+    MPI_Irecv(
+        recv_up, count, T, mp.nbr_up, 100,
+        mp.comm, &reqs[nreq++]
+    );
+    MPI_Isend(
+        send_down, count, T, mp.nbr_down, 100,
+        mp.comm, &reqs[nreq++]
+    );
+    MPI_Isend(
+        send_up, count, T, mp.nbr_up, 101,
+        mp.comm, &reqs[nreq++]
     );
 
-    MPI_Sendrecv(
-        send_up, count, T, mp.nbr_up, 101,
-        recv_up, count, T, mp.nbr_up, 100,
-        mp.comm, MPI_STATUS_IGNORE
-    );
+    MPI_Waitall(nreq, reqs, MPI_STATUSES_IGNORE);
 }
 
 void apply_transmissive_boundary_mpi(Grid2D& grid, const MpiDecomp2D& mp) {
@@ -413,15 +432,26 @@ void apply_transmissive_boundary_mpi(Grid2D& grid, const MpiDecomp2D& mp) {
 double compute_dt_mpi(const Grid2D& grid, const MpiDecomp2D& mp, double cfl) {
     double max_speed_local = 0.0;
 
-    for (int j = grid.j_begin(); j < grid.j_end(); ++j) {
-        for (int i = grid.i_begin(); i < grid.i_end(); ++i) {
+    const int ib = grid.i_begin();
+    const int ie = grid.i_end();
+    const int jb = grid.j_begin();
+    const int je = grid.j_end();
+
+    // Pure MPI version: each rank scans its own slab serially.
+    // Optimisation here is mainly loop-local: cache bounds, avoid nested std::max
+    // calls in the hot loop, and keep the reduction variable scalar/local.
+    for (int j = jb; j < je; ++j) {
+        for (int i = ib; i < ie; ++i) {
             const Primitive V = phys::cons_to_prim(grid(i, j));
             const double a = phys::sound_speed(V);
 
             const double sx = std::abs(V.u) + a;
             const double sy = std::abs(V.v) + a;
+            const double s = (sx > sy) ? sx : sy;
 
-            max_speed_local = std::max(max_speed_local, std::max(sx, sy));
+            if (s > max_speed_local) {
+                max_speed_local = s;
+            }
         }
     }
 
@@ -441,7 +471,8 @@ double compute_dt_mpi(const Grid2D& grid, const MpiDecomp2D& mp, double cfl) {
         );
     }
 
-    return cfl * std::min(grid.dx(), grid.dy()) / max_speed_global;
+    const double min_spacing = (grid.dx() < grid.dy()) ? grid.dx() : grid.dy();
+    return cfl * min_spacing / max_speed_global;
 }
 
 // -----------------------------------------------------------------------------
@@ -482,15 +513,15 @@ void advance_second_order_mpi(
     fill_x_face_cache_mpi(Uold, dt, solver, ws);
 
     for (int j = jb; j < je; ++j) {
-        for (int i = ib; i < ie; ++i) {
-            const int local_j = j - jb;
-            const int local_i_face_m = (i - 1) - (ib - 1);
-            const int local_i_face_p = i - (ib - 1);
+        const int local_j = j - jb;
+        const int cache_row = local_j * nx_faces;
 
-            const Conserved& Fx_m =
-                ws.fx_cache[xface_idx(local_j, local_i_face_m, nx_faces)];
-            const Conserved& Fx_p =
-                ws.fx_cache[xface_idx(local_j, local_i_face_p, nx_faces)];
+        for (int i = ib; i < ie; ++i) {
+            const int local_i_face_m = i - ib;
+            const int local_i_face_p = local_i_face_m + 1;
+
+            const Conserved& Fx_m = ws.fx_cache[cache_row + local_i_face_m];
+            const Conserved& Fx_p = ws.fx_cache[cache_row + local_i_face_p];
 
             Utmp(i, j) = Uold(i, j) - dt_over_dx * (Fx_p - Fx_m);
         }
@@ -501,15 +532,16 @@ void advance_second_order_mpi(
     fill_y_face_cache_mpi(Utmp, dt, solver, ws);
 
     for (int j = jb; j < je; ++j) {
+        const int local_j_face_m = j - jb;
+        const int local_j_face_p = local_j_face_m + 1;
+        const int cache_row_m = local_j_face_m * nx_cells;
+        const int cache_row_p = local_j_face_p * nx_cells;
+
         for (int i = ib; i < ie; ++i) {
             const int local_i = i - ib;
-            const int local_j_face_m = (j - 1) - (jb - 1);
-            const int local_j_face_p = j - (jb - 1);
 
-            const Conserved& Fy_m =
-                ws.fy_cache[yface_idx(local_j_face_m, local_i, nx_cells)];
-            const Conserved& Fy_p =
-                ws.fy_cache[yface_idx(local_j_face_p, local_i, nx_cells)];
+            const Conserved& Fy_m = ws.fy_cache[cache_row_m + local_i];
+            const Conserved& Fy_p = ws.fy_cache[cache_row_p + local_i];
 
             Unew(i, j) = Utmp(i, j) - dt_over_dy * (Fy_p - Fy_m);
         }
