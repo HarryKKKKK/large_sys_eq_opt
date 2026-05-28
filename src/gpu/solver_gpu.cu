@@ -13,6 +13,7 @@
 namespace {
 
 constexpr int kDtReductionThreads = 256;
+constexpr int kXRegisterTile = 2;
 
 #define CUDA_CHECK(call) (call)
 
@@ -267,38 +268,55 @@ __global__ void advance_x_reconstruct_smem_fused_kernel(
     double dt,
     RiemannSolver solver
 ) {
-    const int local_i = blockIdx.x * blockDim.x + threadIdx.x;
-    const int local_j = blockIdx.y * blockDim.y + threadIdx.y;
+    /*
+      Register tiling in the x-sweep.
+
+      Each CUDA thread is responsible for updating kXRegisterTile adjacent
+      x-cells in the final update stage.  The reconstruction and face-flux cache
+      are still computed cooperatively by the whole block, but the shared-memory
+      tile is widened so that one block covers blockDim.x * kXRegisterTile
+      finite-volume cells in x.
+
+      This is a conservative first register-tiling version: only the final
+      flux-difference update is coarsened.  This keeps the more complicated
+      reconstruction and Riemann-flux stages close to the validated shared-memory
+      implementation while allowing neighbouring face fluxes and cell states to
+      be reused in registers during the update.
+    */
+    const int cells_x = blockDim.x * kXRegisterTile;
+
+    const int local_i0 = blockIdx.x * cells_x + threadIdx.x * kXRegisterTile;
+    const int local_j  = blockIdx.y * blockDim.y + threadIdx.y;
 
     const int tid = threadIdx.y * blockDim.x + threadIdx.x;
     const int block_threads = blockDim.x * blockDim.y;
 
-    const int block_i_start = blockIdx.x * blockDim.x;
+    const int block_i_start = blockIdx.x * cells_x;
 
     /*
-      For updating blockDim.x cells, we need blockDim.x + 1 faces.
+      For updating cells_x cells, we need cells_x + 1 faces.
 
       Face f needs reconstructed states from cells:
           left cell  = f - 1
           right cell = f
 
       Therefore we reconstruct cells:
-          block_i_start - 1 ... block_i_start + blockDim.x
+          block_i_start - 1 ... block_i_start + cells_x
 
       Reconstruction of a cell needs one extra neighbour on both sides.
       Therefore the conserved state tile is:
-          block_i_start - 2 ... block_i_start + blockDim.x + 1
+          block_i_start - 2 ... block_i_start + cells_x + 1
     */
 
-    const int state_tile_w = blockDim.x + 4;
+    const int state_tile_w = cells_x + 4;
     const int state_tile_h = blockDim.y;
     const int state_tile_n = state_tile_w * state_tile_h;
 
-    const int recon_tile_w = blockDim.x + 2;
+    const int recon_tile_w = cells_x + 2;
     const int recon_tile_h = blockDim.y;
     const int recon_tile_n = recon_tile_w * recon_tile_h;
 
-    const int flux_tile_w = blockDim.x + 1;
+    const int flux_tile_w = cells_x + 1;
     const int flux_tile_h = blockDim.y;
     const int flux_tile_n = flux_tile_w * flux_tile_h;
 
@@ -451,48 +469,57 @@ __global__ void advance_x_reconstruct_smem_fused_kernel(
     __syncthreads();
 
     // -------------------------------------------------------------------------
-    // 4. Update cells directly.
+    // 4. Update cells directly with x-register tiling.
     // -------------------------------------------------------------------------
-    if (local_i >= Uin.nx || local_j >= Uin.ny) {
+    if (local_j >= Uin.ny) {
         return;
     }
 
     const int sj = threadIdx.y;
 
-    const int fidx_m = sj * flux_tile_w + threadIdx.x;
-    const int fidx_p = sj * flux_tile_w + threadIdx.x + 1;
+    #pragma unroll
+    for (int t = 0; t < kXRegisterTile; ++t) {
+        const int local_i = local_i0 + t;
 
-    const Conserved Fx_m(
-        s_F_rho[fidx_m],
-        s_F_rhou[fidx_m],
-        s_F_rhov[fidx_m],
-        s_F_E[fidx_m]
-    );
+        if (local_i < Uin.nx) {
+            const int tile_i = threadIdx.x * kXRegisterTile + t;
 
-    const Conserved Fx_p(
-        s_F_rho[fidx_p],
-        s_F_rhou[fidx_p],
-        s_F_rhov[fidx_p],
-        s_F_E[fidx_p]
-    );
+            const int fidx_m = sj * flux_tile_w + tile_i;
+            const int fidx_p = sj * flux_tile_w + tile_i + 1;
 
-    const int state_cell_idx = sj * state_tile_w + threadIdx.x + 2;
+            const Conserved Fx_m(
+                s_F_rho[fidx_m],
+                s_F_rhou[fidx_m],
+                s_F_rhov[fidx_m],
+                s_F_E[fidx_m]
+            );
 
-    const Conserved Uc = load_conserved_smem(
-        s_rho, s_rhou, s_rhov, s_E,
-        state_cell_idx
-    );
+            const Conserved Fx_p(
+                s_F_rho[fidx_p],
+                s_F_rhou[fidx_p],
+                s_F_rhov[fidx_p],
+                s_F_E[fidx_p]
+            );
 
-    const Conserved Unew_cell = Uc - dt_over_dx * (Fx_p - Fx_m);
+            const int state_cell_idx = sj * state_tile_w + tile_i + 2;
 
-    const int gi = Uin.i_begin() + local_i;
-    const int gj = Uin.j_begin() + local_j;
-    const int gidx = Uin.flat_index(gi, gj);
+            const Conserved Uc = load_conserved_smem(
+                s_rho, s_rhou, s_rhov, s_E,
+                state_cell_idx
+            );
 
-    Uout.rho[gidx]  = Unew_cell.rho;
-    Uout.rhou[gidx] = Unew_cell.rhou;
-    Uout.rhov[gidx] = Unew_cell.rhov;
-    Uout.E[gidx]    = Unew_cell.E;
+            const Conserved Unew_cell = Uc - dt_over_dx * (Fx_p - Fx_m);
+
+            const int gi = Uin.i_begin() + local_i;
+            const int gj = Uin.j_begin() + local_j;
+            const int gidx = Uin.flat_index(gi, gj);
+
+            Uout.rho[gidx]  = Unew_cell.rho;
+            Uout.rhou[gidx] = Unew_cell.rhou;
+            Uout.rhov[gidx] = Unew_cell.rhov;
+            Uout.E[gidx]    = Unew_cell.E;
+        }
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -880,9 +907,16 @@ void advance_second_order_gpu(
       state tiles, reconstructed states, and face fluxes in shared memory.
     */
     (void)ws;
-    const dim3 threads(16, 8);
+    const dim3 threads(16, 16);
 
-    const dim3 blocks(
+    const int x_cells_per_block = threads.x * kXRegisterTile;
+
+    const dim3 x_blocks(
+        (Uold.nx() + x_cells_per_block - 1) / x_cells_per_block,
+        (Uold.ny() + threads.y - 1) / threads.y
+    );
+
+    const dim3 y_blocks(
         (Uold.nx() + threads.x - 1) / threads.x,
         (Uold.ny() + threads.y - 1) / threads.y
     );
@@ -890,15 +924,15 @@ void advance_second_order_gpu(
     // -------------------------------------------------------------------------
     // x sweep shared memory size
     // -------------------------------------------------------------------------
-    const int x_state_tile_w = threads.x + 4;
+    const int x_state_tile_w = x_cells_per_block + 4;
     const int x_state_tile_h = threads.y;
     const int x_state_tile_n = x_state_tile_w * x_state_tile_h;
 
-    const int x_recon_tile_w = threads.x + 2;
+    const int x_recon_tile_w = x_cells_per_block + 2;
     const int x_recon_tile_h = threads.y;
     const int x_recon_tile_n = x_recon_tile_w * x_recon_tile_h;
 
-    const int x_flux_tile_w = threads.x + 1;
+    const int x_flux_tile_w = x_cells_per_block + 1;
     const int x_flux_tile_h = threads.y;
     const int x_flux_tile_n = x_flux_tile_w * x_flux_tile_h;
 
@@ -909,7 +943,7 @@ void advance_second_order_gpu(
             4 * static_cast<std::size_t>(x_flux_tile_n)
         ) * sizeof(double);
 
-    advance_x_reconstruct_smem_fused_kernel<<<blocks, threads, x_smem_bytes>>>(
+    advance_x_reconstruct_smem_fused_kernel<<<x_blocks, threads, x_smem_bytes>>>(
         make_view(static_cast<const Grid2DGPU&>(Uold)),
         make_view(Utmp),
         dt,
@@ -942,7 +976,7 @@ void advance_second_order_gpu(
             4 * static_cast<std::size_t>(y_flux_tile_n)
         ) * sizeof(double);
 
-    advance_y_reconstruct_smem_fused_kernel<<<blocks, threads, y_smem_bytes>>>(
+    advance_y_reconstruct_smem_fused_kernel<<<y_blocks, threads, y_smem_bytes>>>(
         make_view(static_cast<const Grid2DGPU&>(Utmp)),
         make_view(Unew),
         dt,

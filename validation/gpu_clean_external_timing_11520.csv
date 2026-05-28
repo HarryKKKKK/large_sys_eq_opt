@@ -1,0 +1,5 @@
+arch,case,solver,n,nx,ny,total_cells,total_steps,real_seconds,user_seconds,sys_seconds,max_rss_kb,git_branch,git_commit
+gpu,shock_bubble,hll,1,500,197,98500,6359,3.42,2.70,0.34,292556,opt_1,4c3a491
+gpu,shock_bubble,hll,2,1000,394,394000,13440,7.79,7.51,0.27,137204,opt_1,4c3a491
+gpu,shock_bubble,hll,4,2000,788,1576000,27955,56.68,56.37,0.33,210956,opt_1,4c3a491
+gpu,shock_bubble,hll,8,4000,1576,6304000,57314,453.29,452.92,0.50,507784,opt_1,4c3a491
