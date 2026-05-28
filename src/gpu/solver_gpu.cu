@@ -60,6 +60,20 @@ __device__ inline Conserved load_state(const ConstGrid2DGPUView& U, int i, int j
     return Conserved(U.rho[idx], U.rhou[idx], U.rhov[idx], U.E[idx]);
 }
 
+__device__ __forceinline__ double warp_reduce_max_gpu(double val) {
+    // Warp-level max reduction using register shuffle instructions.
+    // This avoids repeated shared-memory reads/writes inside each warp.
+    const unsigned int mask = 0xffffffffu;
+
+    val = fmax(val, __shfl_down_sync(mask, val, 16));
+    val = fmax(val, __shfl_down_sync(mask, val, 8));
+    val = fmax(val, __shfl_down_sync(mask, val, 4));
+    val = fmax(val, __shfl_down_sync(mask, val, 2));
+    val = fmax(val, __shfl_down_sync(mask, val, 1));
+
+    return val;
+}
+
 // Clamp-based transmissive boundary loading.
 //
 // These helpers implement the same mathematical boundary condition as explicit
@@ -167,9 +181,18 @@ __global__ void compute_block_max_speed_kernel(
     ConstGrid2DGPUView grid,
     double* __restrict__ block_max
 ) {
-    extern __shared__ double s_speed[];
+    // Only one value per warp is stored in shared memory.  The main reduction
+    // inside each warp is done with __shfl_down_sync(), which keeps values in
+    // registers and avoids the repeated __syncthreads() calls used by a full
+    // shared-memory tree reduction.
+    extern __shared__ double warp_max[];
 
-    const int tid = threadIdx.x;
+    const int tid  = threadIdx.x;
+    const int lane = tid & 31;
+    const int warp = tid >> 5;
+
+    const int num_warps = (blockDim.x + 31) >> 5;
+
     const int linear = blockIdx.x * blockDim.x + tid;
     const int total_interior = grid.nx * grid.ny;
 
@@ -199,23 +222,29 @@ __global__ void compute_block_max_speed_kernel(
         local_speed = fmax(sx, sy);
     }
 
-    s_speed[tid] = local_speed;
+    // Stage 1: reduce values within each warp using shuffle instructions.
+    local_speed = warp_reduce_max_gpu(local_speed);
+
+    // Stage 2: one lane per warp writes the warp maximum to shared memory.
+    if (lane == 0) {
+        warp_max[warp] = local_speed;
+    }
+
     __syncthreads();
 
-    // In-block max reduction.  One scalar per CUDA block is written to global
-    // memory, so the final CUB reduction works on O(number_of_blocks) values
-    // instead of O(number_of_cells) values.
-    for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
-        if (tid < stride) {
-            s_speed[tid] = fmax(s_speed[tid], s_speed[tid + stride]);
-        }
-        __syncthreads();
+    // Stage 3: the first warp reduces the per-warp maxima.
+    double block_speed = 0.0;
+
+    if (warp == 0) {
+        block_speed = (lane < num_warps) ? warp_max[lane] : 0.0;
+        block_speed = warp_reduce_max_gpu(block_speed);
     }
 
     if (tid == 0) {
-        block_max[blockIdx.x] = s_speed[0];
+        block_max[blockIdx.x] = block_speed;
     }
 }
+
 
 __global__ void advance_first_order_kernel(
     ConstGrid2DGPUView Uold,
@@ -829,10 +858,12 @@ double compute_dt_gpu(const Grid2DGPU& grid, GpuWorkspace& ws, double cfl) {
     const std::size_t num_dt_blocks =
         (total_interior + kDtReductionThreads - 1) / kDtReductionThreads;
 
+    const int num_dt_warps = (kDtReductionThreads + 31) / 32;
+
     compute_block_max_speed_kernel<<<
         static_cast<unsigned int>(num_dt_blocks),
         kDtReductionThreads,
-        kDtReductionThreads * sizeof(double)
+        static_cast<std::size_t>(num_dt_warps) * sizeof(double)
     >>>(make_view(grid), ws.speed_d);
 
 
