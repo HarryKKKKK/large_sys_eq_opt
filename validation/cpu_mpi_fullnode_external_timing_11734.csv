@@ -1,0 +1,3 @@
+arch,case,solver,n,ranks,threads_per_rank,nx,ny,total_cells,total_steps,real_seconds,user_seconds,sys_seconds,max_rss_kb,run_log,time_log
+mpi,shock_bubble,hll,4,48,1,2000,788,1576000,30221,341.98,16331.90,53.02,22976,logs/mpi_shock_bubble_hll_n4_r48_t1_11734.log,logs/mpi_shock_bubble_hll_n4_r48_t1_11734.time
+mpi,blast_wave,hll,4,48,1,2000,2000,4000000,10395,323.09,15442.71,40.93,30844,logs/mpi_blast_wave_hll_n4_r48_t1_11734.log,logs/mpi_blast_wave_hll_n4_r48_t1_11734.time
