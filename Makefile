@@ -9,7 +9,7 @@ CXXFLAGS_BASE     := -std=c++17 -O3 -Wall -Wextra -pedantic -Ihead
 NVCCFLAGS_BASE    := -std=c++17 -O3 -Ihead -Xcompiler="-Wall -Wextra"
 MPICXXFLAGS_BASE  := -std=c++17 -O3 -Wall -Wextra -pedantic -Ihead -DOMPI_SKIP_MPICXX
 
-CUDA_ARCH := -arch=sm_80
+CUDA_ARCH := -arch=sm_90
 NVCCFLAGS_BASE += $(CUDA_ARCH)
 
 # =========================
