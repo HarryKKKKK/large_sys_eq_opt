@@ -24,7 +24,7 @@ mkdir -p logs profiles
 
 CASE="shock_bubble"
 SOLVER="hll"
-N=1
+N=4
 
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export OMP_PROC_BIND=close
