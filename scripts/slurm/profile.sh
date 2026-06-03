@@ -70,12 +70,21 @@ echo "===== NSIGHT COMPUTE ====="
 NCU_TMPDIR="${WORKDIR}/profiles/ncu_tmp"
 mkdir -p "$NCU_TMPDIR"
 
-TMPDIR="$NCU_TMPDIR" ncu \
-    --set full \
-    --launch-count 3 \
-    -o "${PROFILE_BASE}_ncu" \
-    --force-overwrite \
-    ./main_gpu "$N" --case "$CASE" --solver "$SOLVER"
+for KERNEL in \
+    "compute_block_max_speed_kernel" \
+    "advance_x_reconstruct_smem_fused_kernel" \
+    "advance_y_reconstruct_smem_fused_kernel"
+do
+    echo "--- Profiling kernel: ${KERNEL} ---"
+    TMPDIR="$NCU_TMPDIR" ncu \
+        --set full \
+        --kernel-name-base function \
+        --kernel-name "${KERNEL}" \
+        --launch-count 3 \
+        -o "${PROFILE_BASE}_ncu_${KERNEL}" \
+        --force-overwrite \
+        ./main_gpu "$N" --case "$CASE" --solver "$SOLVER"
+done
 
 echo ""
 echo "===== PROFILE FILES ====="
