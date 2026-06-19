@@ -18,10 +18,21 @@ cd "$WORKDIR"
 mkdir -p logs validation scaling outputs
 
 # Override like:
-# SCALES_STR="1" CASES_STR="shock_bubble" SOLVERS_STR="hll" sbatch lsc_cpu_mpi_fullnode_clean_compare.sh
-read -r -a SCALES <<< "${SCALES_STR:-1 2 4 8}"
-read -r -a CASES  <<< "${CASES_STR:-shock_bubble blast_wave}"
-read -r -a SOLVERS <<< "${SOLVERS_STR:-hll hllc exact force}"
+# SCALES_STR="1" CASES_STR="shock_bubble" SOLVERS_STR="hll" sbatch script.sh
+# read -r -a SCALES  <<< "${SCALES_STR:-1 2 4 8}"
+read -r -a SCALES  <<< "${SCALES_STR:-4}"
+read -r -a CASES   <<< "${CASES_STR:-shock_bubble blast_wave}"
+read -r -a SOLVERS <<< "${SOLVERS_STR:-hll}"
+# read -r -a SOLVERS <<< "${SOLVERS_STR:-hll hllc exact force}"
+
+# 2D Cartesian process grid.
+# Set to 0 to let MPI_Dims_create choose automatically (recommended).
+# Override like: MPI_PX=6 MPI_PY=8 sbatch script.sh
+MPI_PX="${MPI_PX:-0}"
+MPI_PY="${MPI_PY:-0}"
+
+# dt recompute interval. 1 = every step (original behaviour). 4 = every 4 steps.
+DT_INTERVAL="${DT_INTERVAL:-4}"
 
 detect_cpus_on_node() {
     if [ -n "${SLURM_CPUS_ON_NODE:-}" ]; then
@@ -65,6 +76,9 @@ echo "OMP_THREADS_CPU    : ${OMP_THREADS_CPU}"
 echo "MPI_RANKS          : ${MPI_RANKS}"
 echo "OMP_THREADS_MPI    : ${OMP_THREADS_MPI}"
 echo "MPI total CPU units: ${MPI_TOTAL_CPU_UNITS}"
+echo "MPI_PX             : ${MPI_PX}  (0 = auto)"
+echo "MPI_PY             : ${MPI_PY}  (0 = auto)"
+echo "DT_INTERVAL        : ${DT_INTERVAL}"
 echo "SCALES             : ${SCALES[*]}"
 echo "CASES              : ${CASES[*]}"
 echo "SOLVERS            : ${SOLVERS[*]}"
@@ -92,7 +106,6 @@ if ! command -v mpirun >/dev/null 2>&1; then
     exit 1
 fi
 
-# Keep these for reproducible OpenMP placement.
 export OMP_PROC_BIND=close
 export OMP_PLACES=cores
 
@@ -134,7 +147,9 @@ run_mpi_command() {
 
     /usr/bin/time -f "real_seconds=%e\nuser_seconds=%U\nsys_seconds=%S\nmax_rss_kb=%M" \
         -o "$time_log" \
-        mpirun --host "$(hostname):${MPI_RANKS}" -np "${MPI_RANKS}" --map-by core --bind-to core "$@" \
+        mpirun --host "$(hostname):${MPI_RANKS}" -np "${MPI_RANKS}" \
+            --map-by core --bind-to core \
+            "$@" \
         2>&1 | tee "$run_log"
 }
 
@@ -154,11 +169,17 @@ for N in "${SCALES[@]}"; do
             # append_row "cpu_omp" "$CASE" "$SOLVER" "$N" 1 "$OMP_THREADS_CPU" "CPU" "$CPU_LOG" "$CPU_TIME"
 
             echo ""
-            echo "===== MPI RUN: case=${CASE}, solver=${SOLVER}, n=${N}, ranks=${MPI_RANKS}, threads_per_rank=${OMP_THREADS_MPI} ====="
+            echo "===== MPI RUN: case=${CASE}, solver=${SOLVER}, n=${N}, ranks=${MPI_RANKS}, threads_per_rank=${OMP_THREADS_MPI}, px=${MPI_PX}, py=${MPI_PY}, dt_interval=${DT_INTERVAL} ====="
             MPI_LOG="logs/mpi_${CASE}_${SOLVER}_n${N}_r${MPI_RANKS}_t${OMP_THREADS_MPI}_${SLURM_JOB_ID}.log"
             MPI_TIME="logs/mpi_${CASE}_${SOLVER}_n${N}_r${MPI_RANKS}_t${OMP_THREADS_MPI}_${SLURM_JOB_ID}.time"
             export OMP_NUM_THREADS="${OMP_THREADS_MPI}"
-            run_mpi_command "$MPI_TIME" "$MPI_LOG" ./main_mpi "$N" --case "$CASE" --solver "$SOLVER"
+            run_mpi_command "$MPI_TIME" "$MPI_LOG" \
+                ./main_mpi "$N" \
+                    --case "$CASE" \
+                    --solver "$SOLVER" \
+                    --px "${MPI_PX}" \
+                    --py "${MPI_PY}" \
+                    --dt-interval "${DT_INTERVAL}"
             echo "----- MPI TIME -----"
             cat "$MPI_TIME"
             append_row "mpi" "$CASE" "$SOLVER" "$N" "$MPI_RANKS" "$OMP_THREADS_MPI" "MPI" "$MPI_LOG" "$MPI_TIME"

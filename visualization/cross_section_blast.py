@@ -10,8 +10,17 @@ The default cut is a ray starting from the domain centre and going in the
 45-degree direction. The horizontal coordinate is the distance from the
 centre along that ray.
 
-The y-axis scale and y-axis limits are configured inside this script using
-Y_SCALE, Y_LIMITS, and SHARE_AUTO_Y_LIMITS near the top of the file.
+Y-axis (and X-axis) scale can now be set on the command line, e.g.
+
+    --yscale log            # Sedov-style log density axis (like the FLASH figure)
+    --xscale log            # log radius axis (drops the r = 0 sample)
+    --yscale log --xscale log   # true log-log
+
+If --yscale is not given, the in-file Y_SCALE value below is used (default
+"linear"), so existing behaviour is unchanged. The y-axis limits are still
+controlled by Y_SCALE / Y_LIMITS / SHARE_AUTO_Y_LIMITS; the shared automatic
+limits are now computed in log space when the y-axis is logarithmic, so they
+never produce a non-positive lower bound.
 
 Expected CSV columns:
     i,j,x,y,rho,rhou,rhov,E
@@ -23,12 +32,20 @@ Expected filename pattern used by this script:
     cpu_blast_wave_exact_n1_snapshot_5.csv
 
 Typical usage:
+    # Sedov-style log-y comparison of all four solvers at snapshot 5
+    python visualization/cross_section_blast_solvers_snapshot_cpu_2x2_45deg.py outputs \
+        --snapshot 5 \
+        --final-time 0.2 \
+        --yscale log \
+        --shared-limits
+
+    # Linear (original behaviour)
     python visualization/cross_section_blast_solvers_snapshot_cpu_2x2_45deg.py outputs \
         --snapshot 5 \
         --final-time 0.2 \
         --shared-limits
 
-    # Use another angle, e.g. 30 degrees from the positive x-axis
+    # Another angle, e.g. 30 degrees from the positive x-axis
     python visualization/cross_section_blast_solvers_snapshot_cpu_2x2_45deg.py outputs \
         --snapshot 5 \
         --angle-deg 30 \
@@ -52,12 +69,12 @@ SNAPSHOT_RE = re.compile(r"_snapshot_(\d+)\.csv$")
 
 # ============================================================
 # Plot scale configuration
-# Modify these values directly in this script instead of using
-# command-line arguments.
+# These remain available for editing in-file, but --yscale / --xscale
+# on the command line override Y_SCALE / the x-axis scale respectively.
 # ============================================================
 
+# Default y-axis scale used when --yscale is NOT passed.
 # Options supported by matplotlib: "linear", "log", "symlog", "logit".
-# For blast-wave density, "linear" is usually safest.
 Y_SCALE = "linear"
 
 # Manually set y-axis limits for every subplot.
@@ -65,8 +82,9 @@ Y_SCALE = "linear"
 #
 # Examples:
 #   Y_LIMITS = None
-#   Y_LIMITS = (0.0, 1.2)     # zoom into low-density region
+#   Y_LIMITS = (0.0, 1.2)     # zoom into low-density region (linear only)
 #   Y_LIMITS = (0.8, 4.2)     # focus on shock/peak region
+#   Y_LIMITS = (1e-2, 7.0)    # sensible window for a log y-axis
 Y_LIMITS = None
 
 # If Y_LIMITS is None and this is True, all subplots use the same
@@ -75,6 +93,9 @@ Y_LIMITS = None
 SHARE_AUTO_Y_LIMITS = True
 
 # Padding used for shared automatic y-limits.
+# For a linear axis this is a fraction of the (max - min) range.
+# For a log axis it is interpreted as a fraction of the (log10max - log10min)
+# range, applied in log space.
 AUTO_Y_PADDING_FRAC = 0.05
 
 
@@ -288,13 +309,43 @@ def subplot_shape(n: int):
     return nrows, ncols
 
 
-def apply_y_axis_config(ax, shared_ylim=None):
+def compute_shared_ylim(curves, yscale: str):
     """
-    Apply y-axis scale and limits from the global script-level configuration.
-    The user can modify Y_SCALE, Y_LIMITS, and SHARE_AUTO_Y_LIMITS at the top
-    of this file without changing command-line arguments.
+    Compute shared automatic y-limits. For a log y-axis the padding is applied
+    in log space and the lower bound is always kept strictly positive.
+    Returns None if shared limits are not requested or cannot be formed.
     """
-    ax.set_yscale(Y_SCALE)
+    all_dens = np.concatenate([density for _, _, _, density in curves])
+
+    if yscale == "log":
+        pos = all_dens[all_dens > 0.0]
+        if pos.size == 0:
+            return None
+        ymin = float(pos.min())
+        ymax = float(pos.max())
+        if ymax <= ymin:
+            # Degenerate; give a small symmetric window around the value.
+            return (ymin * 0.9, ymax * 1.1)
+        log_min = math.log10(ymin)
+        log_max = math.log10(ymax)
+        pad = AUTO_Y_PADDING_FRAC * (log_max - log_min)
+        return (10.0 ** (log_min - pad), 10.0 ** (log_max + pad))
+
+    # linear / symlog / other
+    ymin = float(all_dens.min())
+    ymax = float(all_dens.max())
+    pad = AUTO_Y_PADDING_FRAC * (ymax - ymin) if ymax > ymin else 0.05
+    return (ymin - pad, ymax + pad)
+
+
+def apply_y_axis_config(ax, yscale: str, shared_ylim=None):
+    """
+    Apply the y-axis scale and limits.
+
+    yscale comes from the command line (--yscale) if given, otherwise from the
+    in-file Y_SCALE. Y_LIMITS, if set, always wins over shared automatic limits.
+    """
+    ax.set_yscale(yscale)
 
     if Y_LIMITS is not None:
         ax.set_ylim(Y_LIMITS[0], Y_LIMITS[1])
@@ -347,6 +398,21 @@ def get_args():
         help="Number of interpolation points along the radial cut. Default: 1000."
     )
     parser.add_argument(
+        "--yscale",
+        default=None,
+        choices=["linear", "log", "symlog", "logit"],
+        help=("Y-axis scale. Overrides the in-file Y_SCALE. "
+              f"If omitted, Y_SCALE='{Y_SCALE}' is used. Use 'log' for the "
+              "Sedov-style density axis."),
+    )
+    parser.add_argument(
+        "--xscale",
+        default="linear",
+        choices=["linear", "log"],
+        help=("X-axis (radius) scale. Default: linear. 'log' drops the r=0 "
+              "sample and is only useful together with --yscale log."),
+    )
+    parser.add_argument(
         "--shared-limits",
         action="store_true",
         help="Use the same x/y limits for all subplots. Recommended for comparing solvers."
@@ -386,6 +452,10 @@ def get_args():
 def main():
     args, input_dir = get_args()
     solvers = parse_solvers(args.solvers)
+
+    # Effective scales: command line overrides the in-file Y_SCALE.
+    eff_yscale = args.yscale if args.yscale is not None else Y_SCALE
+    eff_xscale = args.xscale
 
     files, missing = find_solver_files(input_dir, args.snapshot, solvers)
     if not files:
@@ -435,17 +505,25 @@ def main():
     )
     axes_flat = axes.ravel()
 
+    # Shared x-limits.
     if args.shared_limits:
-        xmin = min(float(np.min(radial)) for _, _, radial, _ in curves)
         xmax = max(float(np.max(radial)) for _, _, radial, _ in curves)
+        if eff_xscale == "log":
+            # smallest strictly-positive radius across all curves
+            pos_mins = []
+            for _, _, radial, _ in curves:
+                rp = radial[radial > 0.0]
+                if rp.size:
+                    pos_mins.append(float(rp.min()))
+            xmin = min(pos_mins) if pos_mins else None
+        else:
+            xmin = min(float(np.min(radial)) for _, _, radial, _ in curves)
     else:
         xmin = xmax = None
 
+    # Shared y-limits (log-aware).
     if Y_LIMITS is None and (args.shared_limits or SHARE_AUTO_Y_LIMITS):
-        ymin = min(float(np.min(density)) for _, _, _, density in curves)
-        ymax = max(float(np.max(density)) for _, _, _, density in curves)
-        ypad = AUTO_Y_PADDING_FRAC * (ymax - ymin) if ymax > ymin else 0.05
-        shared_ylim = (ymin - ypad, ymax + ypad)
+        shared_ylim = compute_shared_ylim(curves, eff_yscale)
     else:
         shared_ylim = None
 
@@ -463,12 +541,14 @@ def main():
 
         ax.set_title(f"{solver.upper()}, t = {t:.6f}", fontsize=12)
         ax.set_ylabel("density")
-        ax.grid(True, linewidth=0.4, alpha=0.5)
+        ax.grid(True, which="both", linewidth=0.4, alpha=0.5)
 
-        if args.shared_limits:
+        ax.set_xscale(eff_xscale)
+
+        if args.shared_limits and xmin is not None and xmax is not None:
             ax.set_xlim(xmin, xmax)
 
-        apply_y_axis_config(ax, shared_ylim=shared_ylim)
+        apply_y_axis_config(ax, eff_yscale, shared_ylim=shared_ylim)
 
         row = ax_idx // ncols
         if row == nrows - 1:
@@ -490,7 +570,7 @@ def main():
         angle_part = str(args.angle_deg).replace(".", "p").replace("-", "m")
         output_name = (
             f"blast_wave_cpu_{solver_part}_snapshot_{args.snapshot}"
-            f"_t_{t:.6f}_density_{angle_part}deg_radial_cut_2x2.png"
+            f"_t_{t:.6f}_density_{angle_part}deg_radial_cut_2x2_{eff_yscale}y.png"
         )
         output_path = os.path.join(input_dir, output_name)
     else:

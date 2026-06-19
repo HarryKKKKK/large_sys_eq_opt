@@ -26,8 +26,8 @@ mkdir -p logs validation scaling outputs
 # Override like:
 # SCALES_STR="1" CASES_STR="shock_bubble" SOLVERS_STR="hll" sbatch lsc_gpu_clean_compare.sh
 read -r -a SCALES <<< "${SCALES_STR:-1 2 4 8}"
-read -r -a CASES  <<< "${CASES_STR:-shock_bubble blast_wave}"
-read -r -a SOLVERS <<< "${SOLVERS_STR:-hll hllc exact force}"
+read -r -a CASES  <<< "${CASES_STR:-shock_bubble}"
+read -r -a SOLVERS <<< "${SOLVERS_STR:-hll}"
 
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export OMP_PROC_BIND=close
